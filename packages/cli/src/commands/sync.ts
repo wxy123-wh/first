@@ -1,0 +1,144 @@
+// lisan sync 命令 — 手动触发数据同步（embedding + git）
+
+import { Command } from 'commander';
+import ora from 'ora';
+import { confirm } from '@inquirer/prompts';
+import { readdir, readFile } from 'node:fs/promises';
+import { join, extname, relative } from 'node:path';
+import { loadConfig } from '../config.js';
+import { createVectorStore } from './shared.js';
+import type { Document, DocumentType } from '@lisan/rag';
+
+/** 递归扫描目录下的 .md 文件 */
+async function scanMarkdownFiles(dir: string): Promise<string[]> {
+  const files: string[] = [];
+  try {
+    const entries = await readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory() && !entry.name.startsWith('.')) {
+        files.push(...(await scanMarkdownFiles(fullPath)));
+      } else if (entry.isFile() && extname(entry.name) === '.md') {
+        files.push(fullPath);
+      }
+    }
+  } catch {
+    // 目录不存在时忽略
+  }
+  return files;
+}
+
+/** 根据文件路径推断文档类型 */
+function inferDocType(filePath: string, projectRoot: string): DocumentType {
+  const rel = relative(projectRoot, filePath).replace(/\\\\/g, '/');
+  if (rel.startsWith('设定集/')) return 'setting';
+  if (rel.startsWith('大纲/')) return 'outline';
+  if (rel.startsWith('场景树/')) return 'scene';
+  if (rel.startsWith('正文/')) return 'chapter';
+  return 'reference';
+}
+
+export const syncCommand = new Command('sync')
+  .description('手动触发数据同步（embedding + git）')
+  .option('--no-git', '跳过 git commit')
+  .option('--yes', '跳过确认提示', false)
+  .action(async (options: Record<string, unknown>, cmd: Command) => {
+    const projectRoot = cmd.parent?.opts().project ?? process.cwd();
+    const config = await loadConfig(projectRoot);
+
+    // 扫描需要同步的目录
+    const syncDirs = ['设定集', '大纲', '场景树', '正文'];
+    const allFiles: string[] = [];
+    for (const dir of syncDirs) {
+      allFiles.push(...(await scanMarkdownFiles(join(projectRoot, dir))));
+    }
+
+    if (allFiles.length === 0) {
+      console.log('⚠️  未找到需要同步的 Markdown 文件');
+      return;
+    }
+
+    if (!options['yes']) {
+      const ok = await confirm({
+        message: `将同步 ${allFiles.length} 个文件到向量数据库，是否继续？`,
+        default: true,
+      });
+      if (!ok) {
+        console.log('已取消');
+        return;
+      }
+    }
+
+    // 1. Embedding 同步
+    const spinner = ora(`同步 embedding: 0/${allFiles.length}`).start();
+
+    const vectorStore = await createVectorStore(projectRoot, config);
+    if (!vectorStore) {
+      spinner.fail('向量数据库初始化失败，请检查 embedding 配置');
+      process.exitCode = 1;
+      return;
+    }
+
+    try {
+      // 分批处理，每批 10 个文件
+      const batchSize = 10;
+      let processed = 0;
+
+      for (let i = 0; i < allFiles.length; i += batchSize) {
+        const batch = allFiles.slice(i, i + batchSize);
+        const docs: Document[] = [];
+
+        for (const filePath of batch) {
+          const content = await readFile(filePath, 'utf-8');
+          const rel = relative(projectRoot, filePath).replace(/\\\\/g, '/');
+          const docType = inferDocType(filePath, projectRoot);
+
+          // 提取首行作为摘要
+          const firstLine = content.split('\r\n')[0]?.replace(/^#+\\s*/, '').trim() ?? '';
+
+          docs.push({
+            id: rel,
+            content,
+            metadata: {
+              source: rel,
+              type: docType,
+              abstract: firstLine.slice(0, 200),
+            },
+          });
+        }
+
+        await vectorStore.upsert(docs);
+        processed += batch.length;
+        spinner.text = `同步 embedding: ${processed}/${allFiles.length}`;
+      }
+
+      vectorStore.close();
+      spinner.succeed(`embedding 同步完成: ${allFiles.length} 个文件`);
+    } catch (err) {
+      vectorStore.close();
+      spinner.fail('embedding 同步失败');
+      console.error(err);
+      process.exitCode = 1;
+      return;
+    }
+
+    // 2. Git commit
+    if (options['git'] !== false) {
+      const gitSpinner = ora('Git 提交中').start();
+      try {
+        const { simpleGit } = await import('simple-git');
+        const git = simpleGit(projectRoot);
+        await git.add('.');
+        const status = await git.status();
+        if (status.staged.length > 0) {
+          await git.commit(`sync: 同步 ${allFiles.length} 个文件`);
+          gitSpinner.succeed('Git 提交完成');
+        } else {
+          gitSpinner.info('无需提交，工作区干净');
+        }
+      } catch (err) {
+        gitSpinner.warn('Git 提交失败（非致命）');
+        console.error(err);
+      }
+    }
+  });

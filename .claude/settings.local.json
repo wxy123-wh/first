@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(ls:*)",
+      "Bash(cd D:/code/lisan && npm create tauri-app@latest lisan-desktop -- --template react-ts --manager npm --yes 2>&1)",
+      "Bash(tail:*)",
+      "Bash(cd D:/code/lisan/lisan-desktop/src-tauri && cargo check 2>&1)",
+      "Bash(cd D:/code/lisan/lisan-desktop && npx tsc --noEmit 2>&1)",
+      "Bash(cd D:/code/lisan/lisan-desktop && npm run build 2>&1)",
+      "Bash(npx skills:*)",
+      "WebFetch(domain:skills.sh)",
+      "Bash(mmdc:*)",
+      "Bash(npm install:*)",
+      "Bash(depcruise --version && mmdc --version 2>&1)",
+      "WebSearch",
+      "WebFetch(domain:mermaid.js.org)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(mmdc --version 2>/dev/null || npx @mermaid-js/mermaid-cli --version 2>/dev/null)"
+    ]
+  }
+}
