@@ -37,6 +37,16 @@ export class StoreManager {
     };
   }
 
+  updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'sceneTagTemplate'>>): Project {
+    const project = this.getProject(id);
+    const name = patch.name ?? project.name;
+    const sceneTagTemplate = patch.sceneTagTemplate ?? project.sceneTagTemplate;
+    this.db.raw.prepare(
+      'UPDATE projects SET name = ?, sceneTagTemplate = ? WHERE id = ?'
+    ).run(name, JSON.stringify(sceneTagTemplate), id);
+    return { ...project, name, sceneTagTemplate };
+  }
+
   // === Workflows ===
 
   saveWorkflow(wf: WorkflowDefinition): WorkflowDefinition {
@@ -230,6 +240,12 @@ export class StoreManager {
     }));
   }
 
+  getChapter(id: string): Chapter {
+    const row = this.db.raw.prepare('SELECT * FROM chapters WHERE id = ?').get(id) as any;
+    if (!row) throw new Error(`Chapter not found: ${id}`);
+    return { ...row, workflowId: row.workflowId ?? undefined };
+  }
+
   saveChapterContent(chapterId: string, content: string): void {
     const chapter = this.db.raw.prepare('SELECT * FROM chapters WHERE id = ?').get(chapterId) as any;
     if (!chapter) throw new Error(`Chapter not found: ${chapterId}`);
@@ -294,6 +310,16 @@ export class StoreManager {
   }
 
   // === Entities ===
+
+  saveEntity(entity: Omit<Entity, 'id' | 'createdAt' | 'updatedAt'> & { id?: string }): Entity {
+    const id = entity.id || nanoid();
+    const now = new Date().toISOString();
+    this.db.raw.prepare(`
+      INSERT OR REPLACE INTO entities (id, projectId, type, name, data, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(id, entity.projectId, entity.type, entity.name, JSON.stringify(entity.data), now, now);
+    return { ...entity, id, createdAt: now, updatedAt: now };
+  }
 
   queryEntities(projectId: string, type?: string): Entity[] {
     if (type) {
