@@ -1,15 +1,25 @@
 mod commands;
+mod sidecar;
 mod state;
 
-use commands::cli::run_cli_command;
-use commands::config::{get_config, save_config};
-use commands::executions::{get_execution_detail, get_executions};
-use commands::files::browse_files;
-use commands::projects::{create_project, delete_project, list_projects};
+use commands::{
+    agent_delete, agent_get_md, agent_list, agent_save, agent_save_md, chapter_create,
+    chapter_get_content, chapter_list, chapter_save, chapter_save_content, create_project,
+    delete_project, execution_detail, execution_list, list_projects, outline_get, outline_save,
+    project_get, project_open, project_update, provider_delete, provider_list, provider_save, scene_delete,
+    scene_list, scene_reorder, scene_save, workflow_abort, workflow_list, workflow_pause,
+    workflow_rerun, workflow_resume, workflow_run, workflow_save, workflow_skip,
+};
 use state::AppState;
+use std::path::PathBuf;
 
-fn default_base_dir() -> String {
-    "D:\\code\\lisan".to_string()
+fn default_workspace_root() -> PathBuf {
+    if let Ok(path) = std::env::var("LISAN_WORKSPACE_ROOT") {
+        return PathBuf::from(path);
+    }
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -17,17 +27,43 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
-        .manage(AppState::new(default_base_dir()))
+        .manage(AppState::new(default_workspace_root()))
         .invoke_handler(tauri::generate_handler![
             list_projects,
             create_project,
             delete_project,
-            get_config,
-            save_config,
-            browse_files,
-            get_executions,
-            get_execution_detail,
-            run_cli_command,
+            project_open,
+            project_get,
+            project_update,
+            outline_get,
+            outline_save,
+            workflow_list,
+            workflow_save,
+            workflow_run,
+            workflow_pause,
+            workflow_resume,
+            workflow_skip,
+            workflow_rerun,
+            workflow_abort,
+            agent_list,
+            agent_save,
+            agent_delete,
+            agent_get_md,
+            agent_save_md,
+            provider_list,
+            provider_save,
+            provider_delete,
+            scene_list,
+            scene_save,
+            scene_delete,
+            scene_reorder,
+            chapter_list,
+            chapter_save,
+            chapter_create,
+            chapter_get_content,
+            chapter_save_content,
+            execution_list,
+            execution_detail,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

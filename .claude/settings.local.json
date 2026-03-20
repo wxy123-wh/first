@@ -17,7 +17,15 @@
       "WebFetch(domain:mermaid.js.org)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(mmdc --version 2>/dev/null || npx @mermaid-js/mermaid-cli --version 2>/dev/null)"
+      "Bash(mmdc --version 2>/dev/null || npx @mermaid-js/mermaid-cli --version 2>/dev/null)",
+      "Bash(pnpm test --run)",
+      "Bash(pnpm exec vitest run)",
+      "Bash(pnpm exec vitest run packages/engine/src)",
+      "Bash(pnpm exec vitest run packages/engine/src/sidecar)",
+      "Bash(pnpm rebuild better-sqlite3)",
+      "Bash(git stash)",
+      "Bash(pnpm exec vitest run packages/engine/src/store/database.test.ts)",
+      "Bash(pnpm build)"
     ]
   }
 }

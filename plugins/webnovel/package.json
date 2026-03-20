@@ -1,6 +1,7 @@
 ﻿{
   "name": "@lisan/plugin-webnovel",
   "version": "0.1.0",
+  "deprecated": "Replaced by @lisan/engine in v2.0",
   "type": "module",
   "exports": {
     ".": {

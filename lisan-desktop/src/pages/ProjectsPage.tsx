@@ -123,11 +123,11 @@ export default function ProjectsPage() {
                 </p>
                 <div className="flex gap-2 mt-4">
                   <Link
-                    to={`/projects/${project.id}/workspace`}
+                    to={`/projects/${project.id}/outline`}
                     className="flex-1"
                   >
                     <Button size="sm" className="w-full">
-                      工作台
+                      打开项目
                     </Button>
                   </Link>
                   <Button

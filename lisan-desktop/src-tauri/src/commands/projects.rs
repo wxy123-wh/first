@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::Path;
 use tauri::State;
 
 use crate::state::AppState;
@@ -40,8 +39,7 @@ pub struct CreateProjectInput {
 
 #[tauri::command]
 pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, String> {
-    let base_dir = state.base_dir.lock().unwrap().clone();
-    let base_path = Path::new(&base_dir);
+    let base_path = state.workspace_root.as_path();
 
     let mut projects = Vec::new();
 
@@ -54,9 +52,9 @@ pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, String>
 
         let project_path = entry.path();
         let lisan_dir = project_path.join(".lisan");
-        let config_path = lisan_dir.join("config.yaml");
-
-        if !config_path.exists() {
+        let has_legacy_config = lisan_dir.join("config.yaml").exists();
+        let has_current_config = project_path.join("lisan.config.yaml").exists();
+        if !has_legacy_config && !has_current_config {
             continue;
         }
 
@@ -108,8 +106,7 @@ pub fn create_project(
     state: State<'_, AppState>,
     data: CreateProjectInput,
 ) -> Result<Project, String> {
-    let base_dir = state.base_dir.lock().unwrap().clone();
-    let project_root = Path::new(&base_dir).join(&data.name);
+    let project_root = state.workspace_root.join(&data.name);
 
     if project_root.exists() {
         return Err("项目已存在".to_string());
@@ -207,6 +204,11 @@ pipeline:
 
     fs::write(project_root.join("lisan.config.yaml"), &config_content)
         .map_err(|e| e.to_string())?;
+    fs::write(
+        project_root.join(".lisan").join("config.yaml"),
+        &config_content,
+    )
+    .map_err(|e| e.to_string())?;
 
     let sample_outline = format!(
         "# {} - 故事大纲\n\n## 第一卷：起始\n\n### 第一章\n- 主角登场\n- 引入核心冲突\n\n### 第二章\n- 世界观展开\n- 关键角色出场\n",
@@ -227,8 +229,7 @@ pipeline:
 
 #[tauri::command]
 pub fn delete_project(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let base_dir = state.base_dir.lock().unwrap().clone();
-    let lisan_dir = Path::new(&base_dir).join(&id).join(".lisan");
+    let lisan_dir = state.workspace_root.join(&id).join(".lisan");
 
     if !lisan_dir.exists() {
         return Err("项目不存在".to_string());

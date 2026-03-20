@@ -113,8 +113,24 @@ describe('DecomposePipeline', () => {
     expect(result.errors?.[0]?.step).toBe('read-outline');
   });
 
-  it('回退到通用 outline.md', async () => {
-    await writeFile(join(tempDir, '大纲', 'outline.md'), '# 通用大纲', 'utf-8');
+  it('回退到 canonical 大纲/arc-1.md', async () => {
+    await writeFile(join(tempDir, '大纲', 'arc-1.md'), '# 通用大纲', 'utf-8');
+
+    const provider = createMockProvider('场景树内容');
+
+    const pipeline = new DecomposePipeline({
+      projectRoot: tempDir,
+      bookConfig: testBookConfig,
+      orchestratorProvider: provider,
+      vectorStore: null,
+    });
+
+    const result = await pipeline.run('missing-arc');
+    expect(result.success).toBe(true);
+  });
+
+  it('兼容回退到根目录 legacy outline.md', async () => {
+    await writeFile(join(tempDir, 'outline.md'), '# 旧版大纲', 'utf-8');
 
     const provider = createMockProvider('场景树内容');
 
@@ -218,6 +234,27 @@ describe('PlanPipeline', () => {
     const callArgs = (provider.call as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const userMsg = callArgs.messages.find((m: { role: string }) => m.role === 'user');
     expect(userMsg.content).toContain('大纲参考');
+  });
+
+  it('arc 大纲缺失时回退到 canonical 大纲/arc-1.md 作为参考', async () => {
+    await writeFile(join(tempDir, '场景树', 'scenes.md'), '# 场景树', 'utf-8');
+    await writeFile(join(tempDir, '大纲', 'arc-1.md'), '# 默认大纲', 'utf-8');
+
+    const provider = createMockProvider('规划内容');
+
+    const pipeline = new PlanPipeline({
+      projectRoot: tempDir,
+      bookConfig: testBookConfig,
+      orchestratorProvider: provider,
+      vectorStore: null,
+    });
+
+    const result = await pipeline.run('missing-arc');
+    expect(result.success).toBe(true);
+
+    const callArgs = (provider.call as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const userMsg = callArgs.messages.find((m: { role: string }) => m.role === 'user');
+    expect(userMsg.content).toContain('默认大纲');
   });
 });
 

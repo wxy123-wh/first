@@ -41,7 +41,7 @@ export interface LLMProvider {
 
 /** Provider 配置 */
 export interface ProviderConfig {
-  provider: 'anthropic' | 'openai';
+  provider: 'anthropic' | 'openai' | 'newapi';
   apiKey?: string;
   baseURL?: string;
 }

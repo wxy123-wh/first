@@ -1,24 +1,51 @@
-import { create } from 'zustand';
-import type { Project, Execution } from '../types/lisan';
+import { create } from "zustand";
+import type { AppTab, CurrentProject, WorkflowNotification } from "@/types/engine";
 
-interface LisanStore {
-  projects: Project[];
-  currentProject: Project | null;
-  setProjects: (projects: Project[]) => void;
-  setCurrentProject: (project: Project | null) => void;
-  executions: Execution[];
-  setExecutions: (executions: Execution[]) => void;
-  isLoading: boolean;
-  setIsLoading: (loading: boolean) => void;
+interface SidecarState {
+  isRunning: boolean;
+  projectPath: string | null;
+  lastError: string | null;
 }
 
-export const useLisanStore = create<LisanStore>((set) => ({
-  projects: [],
+interface AppState {
+  currentProject: CurrentProject | null;
+  activeTab: AppTab;
+  sidecar: SidecarState;
+  workflowEvents: WorkflowNotification[];
+  setProject: (project: CurrentProject | null) => void;
+  setActiveTab: (tab: AppTab) => void;
+  setSidecarStatus: (patch: Partial<SidecarState>) => void;
+  pushWorkflowEvent: (event: WorkflowNotification) => void;
+  clearWorkflowEvents: () => void;
+}
+
+const MAX_WORKFLOW_EVENTS = 200;
+
+const initialSidecarState: SidecarState = {
+  isRunning: false,
+  projectPath: null,
+  lastError: null,
+};
+
+export const useAppStore = create<AppState>((set) => ({
   currentProject: null,
-  setProjects: (projects) => set({ projects }),
-  setCurrentProject: (project) => set({ currentProject: project }),
-  executions: [],
-  setExecutions: (executions) => set({ executions }),
-  isLoading: false,
-  setIsLoading: (loading) => set({ isLoading: loading })
+  activeTab: "outline",
+  sidecar: initialSidecarState,
+  workflowEvents: [],
+  setProject: (project) => set({ currentProject: project }),
+  setActiveTab: (tab) => set({ activeTab: tab }),
+  setSidecarStatus: (patch) =>
+    set((state) => ({
+      sidecar: {
+        ...state.sidecar,
+        ...patch,
+      },
+    })),
+  pushWorkflowEvent: (event) =>
+    set((state) => ({
+      workflowEvents: [...state.workflowEvents, event].slice(-MAX_WORKFLOW_EVENTS),
+    })),
+  clearWorkflowEvents: () => set({ workflowEvents: [] }),
 }));
+
+export type { AppState };

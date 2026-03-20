@@ -115,6 +115,7 @@ export default function NewProjectPage() {
                   <SelectContent>
                     <SelectItem value="anthropic">Anthropic</SelectItem>
                     <SelectItem value="openai">OpenAI</SelectItem>
+                    <SelectItem value="newapi">NewAPI</SelectItem>
                   </SelectContent>
                 </Select>
                 <Input
@@ -146,6 +147,7 @@ export default function NewProjectPage() {
                   <SelectContent>
                     <SelectItem value="openai">OpenAI</SelectItem>
                     <SelectItem value="anthropic">Anthropic</SelectItem>
+                    <SelectItem value="newapi">NewAPI</SelectItem>
                   </SelectContent>
                 </Select>
                 <Input

@@ -1,13 +1,17 @@
-use std::sync::Mutex;
+use std::path::PathBuf;
+
+use crate::sidecar::SidecarManager;
 
 pub struct AppState {
-    pub base_dir: Mutex<String>,
+    pub workspace_root: PathBuf,
+    pub sidecar: SidecarManager,
 }
 
 impl AppState {
-    pub fn new(base_dir: String) -> Self {
+    pub fn new(workspace_root: PathBuf) -> Self {
         Self {
-            base_dir: Mutex::new(base_dir),
+            sidecar: SidecarManager::new(workspace_root.clone()),
+            workspace_root,
         }
     }
 }

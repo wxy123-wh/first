@@ -3,6 +3,7 @@
 import type { LLMProvider, ProviderConfig } from './types.js';
 import { AnthropicProvider } from './anthropic-provider.js';
 import { OpenAIProvider } from './openai-provider.js';
+import { NewApiProvider } from './newapi-provider.js';
 
 /**
  * 根据配置创建 LLM Provider 实例
@@ -16,6 +17,11 @@ export function createProvider(config: ProviderConfig): LLMProvider {
       });
     case 'openai':
       return new OpenAIProvider({
+        apiKey: config.apiKey,
+        baseURL: config.baseURL,
+      });
+    case 'newapi':
+      return new NewApiProvider({
         apiKey: config.apiKey,
         baseURL: config.baseURL,
       });

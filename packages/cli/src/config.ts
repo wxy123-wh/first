@@ -5,7 +5,7 @@ import { z } from 'zod';
 
 /** LLM 模型配置 schema */
 const llmModelSchema = z.object({
-  provider: z.enum(['anthropic', 'openai']),
+  provider: z.enum(['anthropic', 'openai', 'newapi']),
   model: z.string(),
   temperature: z.number().min(0).max(2).optional().default(0.7),
 });

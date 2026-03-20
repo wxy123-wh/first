@@ -22,7 +22,6 @@ function createMockProvider(response: Partial<LLMCallResult> = {}): LLMProvider 
 const baseDefinition: AgentDefinition = {
   id: 'test-agent',
   name: '测试 Agent',
-  role: 'worker',
   model: 'gpt-4o',
   systemPrompt: '你是一个写作助手。当前章节：{{chapter}}，场景：{{scene}}',
   temperature: 0.7,

@@ -1,0 +1,199 @@
+{
+  "repoName": "lisan",
+  "fileCount": 153,
+  "tier": "M",
+  "language": null,
+  "framework": null,
+  "modules": {
+    "Ui": {
+      "files": [
+        "lisan-desktop/src/components/ui/card.tsx",
+        "lisan-desktop/src/components/ui/select.tsx",
+        "lisan-desktop/src/components/ui/skeleton.tsx",
+        "lisan-desktop/src/components/ui/tabs.tsx",
+        "lisan-desktop/src/components/ui/tooltip.tsx",
+        "lisan-desktop/src/lib/utils.ts",
+        "lisan-desktop/src/components/ui/accordion.tsx",
+        "lisan-desktop/src/components/ui/badge.tsx",
+        "lisan-desktop/src/components/ui/button.tsx",
+        "lisan-desktop/src/components/ui/input.tsx",
+        "lisan-desktop/src/components/ui/label.tsx",
+        "lisan-desktop/src/components/ui/progress.tsx",
+        "lisan-desktop/src/components/ui/table.tsx",
+        "lisan-desktop/src/components/ui/textarea.tsx"
+      ],
+      "symbols": 45,
+      "cohesion": "100%"
+    },
+    "Pipeline": {
+      "files": [
+        "packages/core/src/pipeline/draft-parser.ts",
+        "packages/core/src/pipeline/rewrite-pipeline.ts",
+        "plugins/webnovel/src/index.ts",
+        "packages/core/src/checker/post-write-checker.ts",
+        "packages/core/src/context/context-agent.ts",
+        "packages/core/src/pipeline/pass-runner.ts",
+        "packages/core/src/truth/truth-manager.ts",
+        "packages/core/src/pipeline/write-pipeline.ts",
+        "packages/cli/src/commands/write.ts",
+        "packages/core/src/plugin/loader.ts",
+        "packages/llm/src/factory.ts",
+        "packages/core/src/pipeline/preflight.ts",
+        "packages/core/src/pipeline/model-router.ts",
+        "packages/rag/src/lancedb-store.ts",
+        "packages/cli/src/config.ts",
+        "packages/core/src/pipeline/decompose-pipeline.ts",
+        "packages/core/src/pipeline/plan-pipeline.ts",
+        "packages/core/src/observability/trace-writer.ts",
+        "packages/core/src/pipeline/types.ts"
+      ],
+      "symbols": 35,
+      "cohesion": "84%"
+    },
+    "Commands": {
+      "files": [
+        "lisan-desktop/src-tauri/src/commands/config.rs",
+        "lisan-desktop/src-tauri/src/commands/files.rs",
+        "lisan-desktop/src-tauri/src/state.rs",
+        "lisan-desktop/src-tauri/src/commands/executions.rs",
+        "lisan-desktop/src-tauri/src/commands/cli.rs",
+        "lisan-desktop/src-tauri/src/commands/projects.rs",
+        "packages/rag/src/lancedb-store.ts",
+        "packages/cli/src/commands/shared.ts",
+        "lisan-desktop/src-tauri/src/lib.rs"
+      ],
+      "symbols": 17,
+      "cohesion": "91%"
+    },
+    "State": {
+      "files": [
+        "packages/core/src/state/file-state-manager.ts",
+        "packages/core/src/state/entity-graph.ts",
+        "packages/core/src/state/types.ts"
+      ],
+      "symbols": 14,
+      "cohesion": "90%"
+    },
+    "Context": {
+      "files": [
+        "packages/rag/src/lancedb-store.ts",
+        "packages/core/src/context/context-agent.ts",
+        "packages/rag/src/layers.ts"
+      ],
+      "symbols": 13,
+      "cohesion": "82%"
+    },
+    "Truth": {
+      "files": [
+        "packages/core/src/pipeline/write-pipeline.ts",
+        "packages/core/src/context/context-agent.ts",
+        "packages/core/src/state/entity-graph.ts",
+        "packages/core/src/truth/truth-manager.ts"
+      ],
+      "symbols": 12,
+      "cohesion": "80%"
+    },
+    "Checker": {
+      "files": [
+        "packages/core/src/checker/post-write-checker.ts"
+      ],
+      "symbols": 12,
+      "cohesion": "68%"
+    },
+    "Agent": {
+      "files": [
+        "packages/core/src/agent/executor.ts",
+        "packages/llm/src/openai-provider.ts",
+        "packages/llm/src/retry.ts",
+        "packages/llm/src/anthropic-provider.ts",
+        "packages/core/src/agent/types.ts"
+      ],
+      "symbols": 7,
+      "cohesion": "100%"
+    },
+    "Cluster_7": {
+      "files": [
+        "packages/rag/src/lancedb-store.ts",
+        "packages/rag/src/lancedb-store.test.ts"
+      ],
+      "symbols": 5,
+      "cohesion": "67%"
+    }
+  },
+  "edges": [
+    {
+      "from": "Truth",
+      "to": "Pipeline",
+      "type": "CALLS",
+      "weight": 5
+    },
+    {
+      "from": "Truth",
+      "to": "State",
+      "type": "CALLS",
+      "weight": 2
+    },
+    {
+      "from": "Truth",
+      "to": "Checker",
+      "type": "CALLS",
+      "weight": 1
+    },
+    {
+      "from": "Truth",
+      "to": "Cluster_7",
+      "type": "CALLS",
+      "weight": 3
+    },
+    {
+      "from": "Pipeline",
+      "to": "Truth",
+      "type": "CALLS",
+      "weight": 3
+    },
+    {
+      "from": "Pipeline",
+      "to": "State",
+      "type": "CALLS",
+      "weight": 2
+    },
+    {
+      "from": "Pipeline",
+      "to": "Checker",
+      "type": "CALLS",
+      "weight": 1
+    },
+    {
+      "from": "Pipeline",
+      "to": "Cluster_7",
+      "type": "CALLS",
+      "weight": 3
+    },
+    {
+      "from": "Context",
+      "to": "Cluster_7",
+      "type": "CALLS",
+      "weight": 3
+    },
+    {
+      "from": "Commands",
+      "to": "Cluster_7",
+      "type": "CALLS",
+      "weight": 2
+    },
+    {
+      "from": "Pipeline",
+      "to": "Commands",
+      "type": "CALLS",
+      "weight": 1
+    },
+    {
+      "from": "Truth",
+      "to": "Pipeline",
+      "type": "IMPLEMENTS",
+      "weight": 1
+    }
+  ],
+  "detectedInterfaces": [],
+  "backend": "gitnexus"
+}

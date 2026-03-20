@@ -1,0 +1,27 @@
+version: "1"
+book:
+  id: "血色天平"
+  title: "血色天平"
+  plugin: "webnovel"
+
+llm:
+  orchestrator:
+    provider: anthropic
+    model: claude-opus-4-20250514
+    temperature: 0.7
+  worker:
+    provider: openai
+    model: gpt-4o
+    temperature: 0.85
+
+rag:
+  provider: lancedb
+  embedModel: text-embedding-v3
+  embedBaseUrl: ${EMBED_BASE_URL}
+  embedApiKey: ${EMBED_API_KEY}
+
+pipeline:
+  write:
+    chapterWordRange: [3000, 4000]
+    passes: [pass-1, pass-2, pass-3, pass-4, pass-5]
+    autoGitCommit: true

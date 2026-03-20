@@ -60,5 +60,12 @@ pipeline:
 `;
 
     await writeFile(join(root, 'lisan.config.yaml'), defaultConfig, 'utf-8');
+    const defaultOutline = `# 第一卷大纲
+
+## 主线
+- 主角在压迫环境中被迫成长
+- 关键冲突逐步升级并在卷末形成爆点
+`;
+    await writeFile(join(root, '大纲', 'arc-1.md'), defaultOutline, 'utf-8');
     console.log(`✅ 项目已初始化: ${root}`);
   });

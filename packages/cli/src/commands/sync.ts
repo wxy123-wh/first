@@ -3,7 +3,7 @@
 import { Command } from 'commander';
 import ora from 'ora';
 import { confirm } from '@inquirer/prompts';
-import { readdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, extname, relative } from 'node:path';
 import { loadConfig } from '../config.js';
 import { createVectorStore } from './shared.js';
@@ -38,6 +38,26 @@ function inferDocType(filePath: string, projectRoot: string): DocumentType {
   return 'reference';
 }
 
+async function migrateLegacyOutlineIfNeeded(projectRoot: string): Promise<void> {
+  const canonicalPath = join(projectRoot, '大纲', 'arc-1.md');
+  try {
+    await readFile(canonicalPath, 'utf-8');
+    return;
+  } catch {
+    // continue
+  }
+
+  const legacyPath = join(projectRoot, 'outline.md');
+  try {
+    const legacyContent = await readFile(legacyPath, 'utf-8');
+    await mkdir(join(projectRoot, '大纲'), { recursive: true });
+    await writeFile(canonicalPath, legacyContent, 'utf-8');
+    await rm(legacyPath, { force: true });
+  } catch {
+    // legacy file does not exist or cannot be migrated; keep sync process running
+  }
+}
+
 export const syncCommand = new Command('sync')
   .description('手动触发数据同步（embedding + git）')
   .option('--no-git', '跳过 git commit')
@@ -45,6 +65,7 @@ export const syncCommand = new Command('sync')
   .action(async (options: Record<string, unknown>, cmd: Command) => {
     const projectRoot = cmd.parent?.opts().project ?? process.cwd();
     const config = await loadConfig(projectRoot);
+    await migrateLegacyOutlineIfNeeded(projectRoot);
 
     // 扫描需要同步的目录
     const syncDirs = ['设定集', '大纲', '场景树', '正文'];

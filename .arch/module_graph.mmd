@@ -1,0 +1,120 @@
+graph LR
+  subgraph 接口层
+  subgraph CLI["CLI入口\n命令行·交互·配置加载"]
+    src_index["index.ts"]
+    src_config["config.ts"]
+    src_commands_init["init.ts"]
+    src_commands_decompose["decompose.ts"]
+    src_commands_plan["plan.ts"]
+    src_commands_write["write.ts"]
+    src_commands_rewrite["rewrite.ts"]
+    src_commands_sync["sync.ts"]
+    src_commands_status["status.ts"]
+    src_commands_shared["shared.ts"]
+  end
+  subgraph Desktop["桌面前端\nReact·路由·Zustand·项目管理"]
+    App["App.tsx"]
+    main["main.tsx"]
+    pages_ProjectsPage["ProjectsPage.tsx"]
+    pages_ProjectPage["ProjectPage.tsx"]
+    pages_NewProjectPage["NewProjectPage.tsx"]
+    pages_WorkspacePage["WorkspacePage.tsx"]
+    pages_ExecutionDetailPage["ExecutionDetailPage.tsx"]
+    api_cli["cli.ts"]
+    api_index["index.ts"]
+    lib_store["store.ts"]
+    lib_utils["utils.ts"]
+    lib_jsonl_parser["jsonl-parser.ts"]
+    types_lisan["lisan.ts"]
+  end
+  subgraph Tauri["Tauri后端\nRust·命令·文件·进程"]
+    src_main["main.rs"]
+    src_lib["lib.rs"]
+    src_state["state.rs"]
+    src_commands_mod["mod.rs"]
+    src_commands_cli["cli.rs"]
+    src_commands_config["config.rs"]
+    src_commands_executions["executions.rs"]
+    src_commands_files["files.rs"]
+    src_commands_projects["projects.rs"]
+  end
+  end
+  subgraph 核心引擎
+  subgraph Pipeline["管线引擎\n分解·规划·写作·改写·路由"]
+    types["types.ts"]
+    pass_runner["pass-runner.ts"]
+    model_router["model-router.ts"]
+    decompose_pipeline["decompose-pipeline.ts"]
+    plan_pipeline["plan-pipeline.ts"]
+    write_pipeline["write-pipeline.ts"]
+    rewrite_pipeline["rewrite-pipeline.ts"]
+    preflight["preflight.ts"]
+    draft_parser["draft-parser.ts"]
+    index["index.ts"]
+  end
+  Context["上下文组装\n场景驱动·RAG检索·上下文打包"]
+  subgraph Agent["Agent执行器\nLLM调用·提示词·执行"]
+    types["types.ts"]
+    executor["executor.ts"]
+    index["index.ts"]
+    agent_test["agent.test.ts"]
+  end
+  Plugin["插件系统\nBookConfig·Pass加载·扩展"]
+  end
+  subgraph 业务模块
+  subgraph Truth["真相管理器\n设定数据·角色交互·世界状态"]
+    types["types.ts"]
+    truth_manager["truth-manager.ts"]
+    index["index.ts"]
+    truth_manager_test["truth-manager.test.ts"]
+  end
+  Checker["质量检查\n草稿校验·规则检测"]
+  WebNovel["网文插件\n都市异能·五遍改写·反AI检测"]
+  end
+  subgraph LLM["LLM抽象层\nAnthropic·OpenAI·重试·流式"]
+    src_types["types.ts"]
+    src_anthropic_provider["anthropic-provider.ts"]
+    src_openai_provider["openai-provider.ts"]
+    src_factory["factory.ts"]
+    src_retry["retry.ts"]
+    src_index["index.ts"]
+  end
+  subgraph 持久层
+  subgraph State["状态管理\nSQLite·章节记录·实体图谱"]
+    types["types.ts"]
+    file_state_manager["file-state-manager.ts"]
+    entity_graph["entity-graph.ts"]
+    index["index.ts"]
+    state_test["state.test.ts"]
+  end
+  subgraph RAG["RAG向量库\nLanceDB·嵌入·语义检索·分层读取"]
+    src_types["types.ts"]
+    src_lancedb_store["lancedb-store.ts"]
+    src_dashscope_embedding["dashscope-embedding.ts"]
+    src_layers["layers.ts"]
+    src_index["index.ts"]
+  end
+  end
+  subgraph 工具
+  Trace["可观测性\n事件追踪·日志·JSONL"]
+  Errors["错误定义\n错误码·异常类型"]
+  end
+  CLI --> |"IMPORTS"| Pipeline
+  CLI --> |"IMPORTS"| State
+  CLI --> |"IMPORTS"| Plugin
+  CLI --> |"IMPORTS"| LLM
+  CLI --> |"IMPORTS"| RAG
+  Pipeline --> |"CALLS"| Agent
+  Pipeline --> |"CALLS"| State
+  Pipeline --> |"CALLS"| Context
+  Pipeline --> |"CALLS"| Checker
+  Pipeline --> |"CALLS"| Truth
+  Pipeline --> |"CALLS"| Trace
+  Agent --> |"CALLS"| LLM
+  Context --> |"CALLS"| RAG
+  Context --> |"READS"| State
+  State --> |"IMPORTS"| Errors
+  Truth --> |"READS"| State
+  Checker --> |"IMPORTS"| Errors
+  WebNovel --> |"IMPLEMENTS"| Plugin
+  Desktop --> |"CALLS"| Tauri

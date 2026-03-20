@@ -1,0 +1,143 @@
+{
+  "projectName": "Lisan",
+  "techStack": "TypeScript + pnpm monorepo + Vercel AI SDK + LanceDB + SQLite + Tauri + React",
+  "direction": "LR",
+  "constraints": ["所有LLM调用必须经过@lisan/llm抽象层", "插件通过BookConfig定义写作风格", "管线按固定顺序执行：decompose→plan→write→rewrite"],
+  "modules": {
+    "packages/cli/": {
+      "id": "CLI",
+      "label": "CLI入口",
+      "keywords": "命令行·交互·配置加载",
+      "description": "用户操作入口，提供init/decompose/plan/write/rewrite/sync/status等命令，加载配置并调度核心管线。",
+      "category": "interface",
+      "risk": "LOW",
+      "riskReason": "仅作为入口层，无其他模块依赖"
+    },
+    "packages/core/src/pipeline/": {
+      "id": "Pipeline",
+      "label": "管线引擎",
+      "keywords": "分解·规划·写作·改写·路由",
+      "description": "核心编排系统，包含4条管线（Decompose/Plan/Write/Rewrite），通过PassRunner逐步执行，ModelRouter选择模型。",
+      "category": "core",
+      "risk": "HIGH",
+      "riskReason": "依赖广度：6个模块被此模块调用，是系统核心调度中枢"
+    },
+    "packages/core/src/agent/": {
+      "id": "Agent",
+      "label": "Agent执行器",
+      "keywords": "LLM调用·提示词·执行",
+      "description": "封装LLM调用逻辑，根据Agent定义（系统提示词、模型、温度）执行推理任务并返回结果。",
+      "category": "core",
+      "risk": "HIGH",
+      "riskReason": "接口暴露：所有LLM交互的唯一通道"
+    },
+    "packages/core/src/state/": {
+      "id": "State",
+      "label": "状态管理",
+      "keywords": "SQLite·章节记录·实体图谱",
+      "description": "管理项目状态（章节进度、弧线信息）和实体关系图谱，使用SQLite持久化。",
+      "category": "storage",
+      "risk": "HIGH",
+      "riskReason": "数据所有权：拥有SQLite数据库，3个模块读取此模块数据"
+    },
+    "packages/core/src/context/": {
+      "id": "Context",
+      "label": "上下文组装",
+      "keywords": "场景驱动·RAG检索·上下文打包",
+      "description": "ContextAgent根据当前场景从RAG和状态中检索相关信息，组装为LLM可用的上下文。",
+      "category": "core",
+      "risk": "HIGH",
+      "riskReason": "依赖广度：被Pipeline调用，同时依赖RAG和State"
+    },
+    "packages/core/src/plugin/": {
+      "id": "Plugin",
+      "label": "插件系统",
+      "keywords": "BookConfig·Pass加载·扩展",
+      "description": "定义插件接口（LisanPlugin），加载BookConfig和自定义Pass，支持按类型扩展写作风格。",
+      "category": "core",
+      "risk": "HIGH",
+      "riskReason": "接口暴露：外部插件通过此接口注入配置"
+    },
+    "packages/core/src/truth/": {
+      "id": "Truth",
+      "label": "真相管理器",
+      "keywords": "设定数据·角色交互·世界状态",
+      "description": "管理小说的设定真相（settlement data）、角色交互记录和世界状态，确保写作一致性。",
+      "category": "business",
+      "risk": "HIGH",
+      "riskReason": "数据所有权：维护设定一致性数据"
+    },
+    "packages/core/src/checker/": {
+      "id": "Checker",
+      "label": "质量检查",
+      "keywords": "草稿校验·规则检测",
+      "description": "对生成的草稿进行确定性后验证，检查格式、字数、禁用词等规则。",
+      "category": "business",
+      "risk": "LOW",
+      "riskReason": "仅被Pipeline调用，无数据所有权"
+    },
+    "packages/core/src/observability/": {
+      "id": "Trace",
+      "label": "可观测性",
+      "keywords": "事件追踪·日志·JSONL",
+      "description": "TraceWriter记录管线执行过程中的事件，输出JSONL格式追踪日志。",
+      "category": "util",
+      "risk": "LOW",
+      "riskReason": "仅被Pipeline调用，无外部依赖"
+    },
+    "packages/core/src/errors/": {
+      "id": "Errors",
+      "label": "错误定义",
+      "keywords": "错误码·异常类型",
+      "description": "定义统一的错误类型LisanError和错误码枚举LisanErrorCode。",
+      "category": "util",
+      "risk": "LOW",
+      "riskReason": "基础工具模块，无数据所有权"
+    },
+    "packages/llm/": {
+      "id": "LLM",
+      "label": "LLM抽象层",
+      "keywords": "Anthropic·OpenAI·重试·流式",
+      "description": "统一的LLM提供者抽象，封装Anthropic和OpenAI SDK，提供call/stream接口和自动重试。",
+      "category": "external",
+      "risk": "HIGH",
+      "riskReason": "接口暴露：所有AI调用的唯一出口，Agent和CLI直接依赖"
+    },
+    "packages/rag/": {
+      "id": "RAG",
+      "label": "RAG向量库",
+      "keywords": "LanceDB·嵌入·语义检索·分层读取",
+      "description": "向量数据库抽象层，使用LanceDB存储文档嵌入，支持向量/BM25/混合检索和L0/L1/L2分层读取。",
+      "category": "storage",
+      "risk": "HIGH",
+      "riskReason": "数据所有权：拥有向量数据库，Context模块依赖此模块检索"
+    },
+    "plugins/webnovel/": {
+      "id": "WebNovel",
+      "label": "网文插件",
+      "keywords": "都市异能·五遍改写·反AI检测",
+      "description": "网文写作插件，定义血色天平风格的BookConfig，包含5遍改写Pass和8个Agent定义。",
+      "category": "business",
+      "risk": "LOW",
+      "riskReason": "独立插件，仅实现Plugin接口"
+    },
+    "lisan-desktop/src/": {
+      "id": "Desktop",
+      "label": "桌面前端",
+      "keywords": "React·路由·Zustand·项目管理",
+      "description": "Tauri桌面应用的React前端，提供项目管理、执行监控和工作区界面。",
+      "category": "interface",
+      "risk": "LOW",
+      "riskReason": "独立前端，通过Tauri命令与后端通信"
+    },
+    "lisan-desktop/src-tauri/": {
+      "id": "Tauri",
+      "label": "Tauri后端",
+      "keywords": "Rust·命令·文件·进程",
+      "description": "Tauri Rust后端，提供CLI调用、文件操作、项目管理和执行记录等命令。",
+      "category": "interface",
+      "risk": "HIGH",
+      "riskReason": "接口暴露：桌面应用的系统级操作入口"
+    }
+  }
+}

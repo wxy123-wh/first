@@ -4,6 +4,7 @@ import type { WorkflowEvent } from './events.js';
 import { StoreManager } from '../store/store-manager.js';
 import { AgentRegistry } from '../agent/registry.js';
 import { AgentExecutor } from '../agent/executor.js';
+import { ContextBuilder } from './context-builder.js';
 import type { LLMProvider } from '@lisan/llm';
 import { mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -87,6 +88,39 @@ describe('WorkflowRuntime', () => {
     expect(types[types.length - 1]).toBe('workflow:complete');
   });
 
+  it('emits executionId for workflow and step events', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+    const runtime = new WorkflowRuntime(env.store, env.registry, env.executor);
+
+    const events: WorkflowEvent[] = [];
+    runtime.on((event) => events.push(event));
+
+    await runtime.run(env.workflow.id, {});
+
+    const executions = env.store.getExecutions(env.project.id);
+    expect(executions.length).toBe(1);
+    const executionId = executions[0].id;
+
+    expect(events.length).toBeGreaterThan(0);
+    for (const event of events) {
+      expect((event as { executionId?: string }).executionId).toBe(executionId);
+    }
+  });
+
+  it('requires valid executionId for pause/resume/abort/skip controls', () => {
+    const env = setupTestEnv();
+    store = env.store;
+    const runtime = new WorkflowRuntime(env.store, env.registry, env.executor);
+
+    expect(() => runtime.pause('missing-execution-id' as never)).toThrow(/execution/i);
+    expect(() => runtime.resume('missing-execution-id' as never)).toThrow(/execution/i);
+    expect(() => runtime.abort('missing-execution-id' as never)).toThrow(/execution/i);
+    expect(() =>
+      runtime.skip('missing-execution-id' as never, env.workflow.steps[0].id),
+    ).toThrow(/execution/i);
+  });
+
   it('skips disabled steps', async () => {
     const env = setupTestEnv();
     store = env.store;
@@ -132,7 +166,7 @@ describe('WorkflowRuntime', () => {
 
     // Abort after first step completes
     runtime.on(e => {
-      if (e.type === 'step:complete') runtime.abort();
+      if (e.type === 'step:complete') runtime.abort(e.executionId);
     });
 
     await runtime.run(env.workflow.id, {});
@@ -155,13 +189,48 @@ describe('WorkflowRuntime', () => {
 
     // Skip the first step
     const firstStepId = env.workflow.steps[0].id;
-    runtime.skip(firstStepId);
+    runtime.on((event) => {
+      if (event.type === 'workflow:start') {
+        runtime.skip(event.executionId, firstStepId);
+      }
+    });
 
     await runtime.run(env.workflow.id, {});
 
     // First step should not have step:complete, only second step should
     const stepCompletes = events.filter(e => e.type === 'step:complete');
     expect(stepCompletes.length).toBe(1);
+  });
+
+  it('does not carry skipped steps into later runs', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const runtime = new WorkflowRuntime(env.store, env.registry, env.executor);
+
+    const firstStepId = env.workflow.steps[0].id;
+    let shouldSkipFirstRun = true;
+    runtime.on((event) => {
+      if (event.type === 'workflow:start' && shouldSkipFirstRun) {
+        shouldSkipFirstRun = false;
+        runtime.skip(event.executionId, firstStepId);
+      }
+    });
+    await runtime.run(env.workflow.id, {});
+
+    const firstExecutionId = env.store.getExecutions(env.project.id)[0].id;
+
+    await runtime.run(env.workflow.id, {});
+
+    const executions = env.store.getExecutions(env.project.id);
+    expect(executions.length).toBe(2);
+
+    const secondExecution = executions.find(execution => execution.id !== firstExecutionId);
+    expect(secondExecution).toBeDefined();
+
+    const secondDetail = env.store.getExecutionDetail(secondExecution!.id);
+    expect(secondDetail.steps.length).toBe(2);
+    expect(secondDetail.steps.every(step => step.status === 'completed')).toBe(true);
   });
 
   it('persists execution state to StoreManager after each step', async () => {
@@ -182,6 +251,60 @@ describe('WorkflowRuntime', () => {
     expect(detail.steps[1].status).toBe('completed');
     expect(detail.steps[0].output).toBe('output-1');
     expect(detail.steps[1].output).toBe('output-2');
+  });
+
+  it('isolates control commands by executionId across parallel runs', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    let callIndex = 0;
+    const delayedProvider: LLMProvider = {
+      name: 'delayed-provider',
+      async call() {
+        callIndex += 1;
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return {
+          text: `output-${callIndex}`,
+          usage: { inputTokens: 10, outputTokens: 20 },
+        };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+    const runtime = new WorkflowRuntime(env.store, env.registry, new AgentExecutor(delayedProvider));
+
+    const workflow2 = env.store.saveWorkflow({
+      id: '',
+      projectId: env.project.id,
+      name: 'parallel-workflow',
+      description: 'parallel test workflow',
+      steps: [
+        { id: '', order: 0, agentId: env.agent1.id, enabled: true },
+        { id: '', order: 1, agentId: env.agent2.id, enabled: true },
+      ],
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    const runA = runtime.run(env.workflow.id, {});
+    const runB = runtime.run(workflow2.id, {});
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const executions = env.store.getExecutions(env.project.id);
+    const executionA = executions.find((execution) => execution.workflowId === env.workflow.id);
+    expect(executionA).toBeDefined();
+
+    runtime.abort(executionA!.id as never);
+
+    await Promise.all([runA, runB]);
+
+    const latestExecutions = env.store.getExecutions(env.project.id);
+    const runAStatus = latestExecutions.find((execution) => execution.id === executionA!.id)?.status;
+    const runBStatus = latestExecutions.find((execution) => execution.workflowId === workflow2.id)?.status;
+
+    expect(runAStatus).toBe('failed');
+    expect(runBStatus).toBe('completed');
   });
 
   it('handles pause and resume commands', async () => {
@@ -212,10 +335,10 @@ describe('WorkflowRuntime', () => {
     runtime.on(e => {
       if (e.type === 'step:complete' && !paused) {
         paused = true;
-        runtime.pause();
+        runtime.pause(e.executionId);
         // Resume after a short delay
         setTimeout(() => {
-          runtime.resume();
+          runtime.resume(e.executionId);
           resolveResume!();
         }, 50);
       }
@@ -265,5 +388,473 @@ describe('WorkflowRuntime', () => {
     const detail = env.store.getExecutionDetail(executionId);
     expect(detail.steps[0].output).toBe('rerun-1');
     expect(detail.steps[1].output).toBe('rerun-2');
+  });
+
+  it('builds decompose instructions from sourceOutline and persists scene cards from JSON output', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const sourceOutline = '主角被围堵后反杀，奠定第一章冲突。';
+    let firstUserPrompt = '';
+    let callCount = 0;
+    const provider: LLMProvider = {
+      name: 'capture-mock',
+      async call(options) {
+        callCount += 1;
+        const userPrompt = options.messages.find((message) => message.role === 'user')?.content ?? '';
+        if (callCount === 1) {
+          firstUserPrompt = userPrompt;
+          return {
+            text: JSON.stringify({
+              scenes: [
+                {
+                  title: '死巷反杀',
+                  characters: ['卡列尔', '打手'],
+                  location: '旧城区死胡同',
+                  eventSkeleton: ['被堵截', '假意示弱', '瞬间反杀'],
+                  tags: { sceneType: '战斗' },
+                },
+              ],
+            }),
+            usage: { inputTokens: 10, outputTokens: 20 },
+          };
+        }
+        return {
+          text: '检验通过',
+          usage: { inputTokens: 8, outputTokens: 6 },
+        };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+
+    const executor = new AgentExecutor(provider);
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      executor,
+      new ContextBuilder(env.store),
+    );
+
+    await runtime.run(env.workflow.id, { sourceOutline });
+
+    expect(firstUserPrompt).toContain(sourceOutline);
+    expect(firstUserPrompt).toContain('"scenes"');
+
+    const scenes = env.store.getScenes(env.project.id);
+    expect(scenes.length).toBe(1);
+    expect(scenes[0].title).toBe('死巷反杀');
+    expect(scenes[0].characters).toEqual(['卡列尔', '打手']);
+    expect(scenes[0].location).toBe('旧城区死胡同');
+    expect(scenes[0].eventSkeleton).toEqual(['被堵截', '假意示弱', '瞬间反杀']);
+    expect(scenes[0].sourceOutline).toBe(sourceOutline);
+  });
+
+  it('injects chapter-scoped context fields for chapterId run (chapter/scenes/entities/previousTail)', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const chapter1 = env.store.saveChapter({
+      projectId: env.project.id,
+      number: 1,
+      title: '序章',
+      status: 'drafting',
+      contentPath: 'chapters/001.md',
+    });
+    const chapter2 = env.store.saveChapter({
+      projectId: env.project.id,
+      number: 2,
+      title: '第二章',
+      status: 'drafting',
+      contentPath: 'chapters/002.md',
+    });
+    env.store.saveChapterContent(chapter1.id, '这是第一章末尾收束。');
+    env.store.saveScene({
+      projectId: env.project.id,
+      chapterId: chapter2.id,
+      parentId: undefined,
+      order: 0,
+      title: '夜巷追击',
+      characters: ['卡列尔'],
+      location: '旧城区',
+      eventSkeleton: ['追击', '失手', '反制'],
+      tags: {},
+      sourceOutline: '',
+    });
+    env.store.saveEntity({
+      projectId: env.project.id,
+      type: 'character',
+      name: '卡列尔',
+      data: {},
+    });
+
+    const customAgent = env.registry.register({
+      name: 'chapter-context-test-agent',
+      agentMd: 'system',
+      provider: 'openai',
+      model: 'gpt-4o',
+      temperature: 0.3,
+      promptTemplate: '章={{chapter.title}}\n场景={{scenes}}\n实体={{entities}}\n衔接={{previousTail}}',
+      inputSchema: [],
+    });
+    const chapterWorkflow = env.store.saveWorkflow({
+      id: '',
+      projectId: env.project.id,
+      name: 'chapter-context-workflow',
+      description: 'test chapter context injection',
+      steps: [
+        { id: '', order: 0, agentId: customAgent.id, enabled: true },
+      ],
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    let firstPrompt = '';
+    let callCount = 0;
+    const provider: LLMProvider = {
+      name: 'capture-context',
+      async call(options) {
+        callCount += 1;
+        if (callCount === 1) {
+          firstPrompt = options.messages.find((message) => message.role === 'user')?.content ?? '';
+        }
+        return {
+          text: 'ok',
+          usage: { inputTokens: 10, outputTokens: 20 },
+        };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(provider),
+      new ContextBuilder(env.store),
+    );
+
+    await runtime.run(chapterWorkflow.id, {}, chapter2.id);
+
+    expect(firstPrompt).toContain('第二章');
+    expect(firstPrompt).toContain('夜巷追击');
+    expect(firstPrompt).toContain('卡列尔');
+    expect(firstPrompt).toContain('这是第一章末尾收束。');
+  });
+
+  it('fails current step when rendered template still has unresolved placeholders', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const customAgent = env.registry.register({
+      name: 'unresolved-template-test-agent',
+      agentMd: 'system',
+      provider: 'openai',
+      model: 'gpt-4o',
+      temperature: 0.3,
+      promptTemplate: '任务={{instructions}}\n缺失={{missing.value}}',
+      inputSchema: [],
+    });
+    const placeholderWorkflow = env.store.saveWorkflow({
+      id: '',
+      projectId: env.project.id,
+      name: 'placeholder-workflow',
+      description: 'test unresolved placeholders',
+      steps: [
+        { id: '', order: 0, agentId: customAgent.id, enabled: true },
+      ],
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      env.executor,
+      new ContextBuilder(env.store),
+    );
+
+    await runtime.run(placeholderWorkflow.id, { instructions: '请生成内容' });
+
+    const executions = env.store.getExecutions(env.project.id);
+    expect(executions.length).toBe(1);
+    expect(executions[0].status).toBe('failed');
+
+    const detail = env.store.getExecutionDetail(executions[0].id);
+    expect(detail.steps.length).toBe(1);
+    expect(detail.steps[0].status).toBe('failed');
+    expect(detail.steps[0].output).toContain('未解析占位符');
+    expect(detail.steps[0].output).toContain('{{missing.value}}');
+  });
+
+  it('strictly parses scene workflow output as object.scenes only', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const provider: LLMProvider = {
+      name: 'strict-scenes',
+      async call() {
+        return {
+          text: JSON.stringify([
+            {
+              title: '数组根节点场景',
+              characters: ['A'],
+              location: 'X',
+              eventSkeleton: ['one'],
+              tags: {},
+            },
+          ]),
+          usage: { inputTokens: 8, outputTokens: 10 },
+        };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(provider),
+      new ContextBuilder(env.store),
+    );
+
+    const events: WorkflowEvent[] = [];
+    runtime.on((event) => events.push(event));
+
+    await runtime.run(env.workflow.id, { sourceOutline: '用于测试严格 scenes 解析。' });
+
+    const scenes = env.store.getScenes(env.project.id);
+    expect(scenes.length).toBe(0);
+
+    const complete = events.find((event) => event.type === 'workflow:complete');
+    expect(complete?.type).toBe('workflow:complete');
+    if (complete?.type === 'workflow:complete') {
+      expect(complete.summary).toContain('已保存 0 条场景');
+    }
+  });
+
+  it('parses scene outputs on completion, de-duplicates by title+chapter+event fingerprint, and reports saved count', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    env.store.saveScene({
+      projectId: env.project.id,
+      chapterId: undefined,
+      parentId: undefined,
+      order: 0,
+      title: '死巷反杀',
+      characters: ['卡列尔'],
+      location: '旧城区',
+      eventSkeleton: ['被堵截', '反杀'],
+      tags: {},
+      sourceOutline: 'existing',
+    });
+
+    const provider: LLMProvider = {
+      name: 'dedupe-scenes',
+      async call() {
+        return {
+          text: JSON.stringify({
+            scenes: [
+              {
+                title: '死巷反杀',
+                characters: ['卡列尔'],
+                location: '旧城区',
+                eventSkeleton: ['被堵截', '反杀'],
+                tags: {},
+              },
+              {
+                title: '旧桥伏击',
+                characters: ['卡列尔', '伏击者'],
+                location: '断桥',
+                eventSkeleton: ['潜伏', '伏击'],
+                tags: { sceneType: '战斗' },
+              },
+              {
+                title: '旧桥伏击',
+                characters: ['卡列尔', '伏击者'],
+                location: '断桥',
+                eventSkeleton: ['潜伏', '伏击'],
+                tags: { sceneType: '战斗' },
+              },
+              {
+                title: '死巷反杀',
+                characters: ['卡列尔'],
+                location: '旧城区',
+                eventSkeleton: ['被堵截', '反杀', '补刀'],
+                tags: {},
+              },
+            ],
+          }),
+          usage: { inputTokens: 10, outputTokens: 20 },
+        };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(provider),
+      new ContextBuilder(env.store),
+    );
+
+    const events: WorkflowEvent[] = [];
+    runtime.on((event) => events.push(event));
+
+    await runtime.run(env.workflow.id, { sourceOutline: '主角被围堵后反杀。' });
+
+    const scenes = env.store.getScenes(env.project.id);
+    expect(scenes.length).toBe(3);
+    expect(scenes.map((scene) => scene.title)).toContain('旧桥伏击');
+
+    const complete = events.find((event) => event.type === 'workflow:complete');
+    expect(complete?.type).toBe('workflow:complete');
+    if (complete?.type === 'workflow:complete') {
+      expect(complete.summary).toContain('已保存 2 条场景');
+    }
+  });
+
+  it('collects scene JSON from multiple step outputs after runtime completion', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    let callCount = 0;
+    const provider: LLMProvider = {
+      name: 'multi-step-scenes',
+      async call() {
+        callCount += 1;
+        if (callCount === 1) {
+          return {
+            text: JSON.stringify({
+              scenes: [
+                {
+                  title: '首场景',
+                  characters: ['甲'],
+                  location: '城门',
+                  eventSkeleton: ['入城'],
+                  tags: {},
+                },
+              ],
+            }),
+            usage: { inputTokens: 6, outputTokens: 12 },
+          };
+        }
+        return {
+          text: JSON.stringify({
+            scenes: [
+              {
+                title: '次场景',
+                characters: ['乙'],
+                location: '内城',
+                eventSkeleton: ['对峙'],
+                tags: {},
+              },
+            ],
+          }),
+          usage: { inputTokens: 6, outputTokens: 12 },
+        };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(provider),
+      new ContextBuilder(env.store),
+    );
+
+    await runtime.run(env.workflow.id, { sourceOutline: '多步骤场景写回测试。' });
+
+    const scenes = env.store.getScenes(env.project.id);
+    expect(scenes.length).toBe(2);
+    expect(scenes.map((scene) => scene.title)).toEqual(expect.arrayContaining(['首场景', '次场景']));
+  });
+
+  it('falls back to a provider with configured credentials when current provider has none', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    env.store.saveProvider({
+      id: 'newapi',
+      name: 'NewAPI',
+      type: 'newapi',
+      model: 'gpt-4o',
+      apiKey: 'fake-key',
+      baseUrl: 'https://example.com/v1',
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    const requestedProviders: string[] = [];
+    const providerFactory = (providerName: string): LLMProvider => {
+      requestedProviders.push(providerName);
+      return {
+        name: providerName,
+        async call() {
+          return { text: 'ok', usage: { inputTokens: 1, outputTokens: 1 } };
+        },
+        async *stream() {
+          yield { text: 'chunk', finishReason: 'stop' as const };
+        },
+      };
+    };
+
+    const executor = new AgentExecutor(null, providerFactory, (providerName) => ({
+      provider: providerName as 'anthropic' | 'openai' | 'newapi',
+      apiKey: providerName === 'newapi' ? 'fake-key' : undefined,
+    }));
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      executor,
+      new ContextBuilder(env.store),
+    );
+
+    await runtime.run(env.workflow.id, {});
+
+    expect(requestedProviders.length).toBeGreaterThan(0);
+    expect(requestedProviders[0]).toBe('newapi');
+  });
+
+  it('persists failure reason into step output when execution fails', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const failingProvider: LLMProvider = {
+      name: 'failing',
+      async call() {
+        throw new Error('mock provider failure');
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+    const executor = new AgentExecutor(failingProvider);
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      executor,
+      new ContextBuilder(env.store),
+    );
+
+    await runtime.run(env.workflow.id, {});
+
+    const executions = env.store.getExecutions(env.project.id);
+    expect(executions.length).toBe(1);
+    expect(executions[0].status).toBe('failed');
+
+    const detail = env.store.getExecutionDetail(executions[0].id);
+    expect(detail.steps.length).toBe(1);
+    expect(detail.steps[0].status).toBe('failed');
+    expect(detail.steps[0].output).toContain('mock provider failure');
   });
 });

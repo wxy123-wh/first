@@ -1,4 +1,4 @@
-import type { LLMProvider } from '@lisan/llm';
+import type { LLMProvider, ProviderConfig } from '@lisan/llm';
 import { StoreManager } from './store/store-manager.js';
 import { AgentRegistry } from './agent/registry.js';
 import { AgentExecutor } from './agent/executor.js';
@@ -20,9 +20,23 @@ export class Engine {
   constructor(opts: EngineOptions) {
     this.store = new StoreManager(opts.projectPath);
     this.agents = new AgentRegistry(this.store);
-    this.executor = new AgentExecutor(opts.provider);
-    this.runtime = new WorkflowRuntime(this.store, this.agents, this.executor);
+    const providerConfigResolver = (providerName: string): ProviderConfig => {
+      const normalized = providerName.trim().toLowerCase();
+      const config = this.store.getProvider(normalized);
+      if (!config) {
+        return {
+          provider: normalized as ProviderConfig['provider'],
+        };
+      }
+      return {
+        provider: config.type,
+        apiKey: config.apiKey,
+        baseURL: config.baseUrl,
+      };
+    };
+    this.executor = new AgentExecutor(opts.provider, undefined, providerConfigResolver);
     this.context = new ContextBuilder(this.store);
+    this.runtime = new WorkflowRuntime(this.store, this.agents, this.executor, this.context);
   }
 
   close(): void {

@@ -63,13 +63,20 @@ export class PlanPipeline {
 
     // 2. 读取大纲（如存在，作为补充参考）
     let outline = '';
+    const arcOutlinePath = join(this.deps.projectRoot, '大纲', `${arcId}.md`);
+    const canonicalOutlinePath = join(this.deps.projectRoot, '大纲', 'arc-1.md');
+    const legacyOutlinePath = join(this.deps.projectRoot, 'outline.md');
     try {
-      outline = await readFile(join(this.deps.projectRoot, '大纲', `${arcId}.md`), 'utf-8');
+      outline = await readFile(arcOutlinePath, 'utf-8');
     } catch {
       try {
-        outline = await readFile(join(this.deps.projectRoot, '大纲', 'outline.md'), 'utf-8');
+        outline = await readFile(canonicalOutlinePath, 'utf-8');
       } catch {
-        // 大纲不存在时继续，场景树是主要输入
+        try {
+          outline = await readFile(legacyOutlinePath, 'utf-8');
+        } catch {
+          // 大纲不存在时继续，场景树是主要输入
+        }
       }
     }
 

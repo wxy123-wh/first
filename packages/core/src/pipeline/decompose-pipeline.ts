@@ -49,20 +49,25 @@ export class DecomposePipeline {
 
     // 1. 读取大纲
     const outlinePath = join(this.deps.projectRoot, '大纲', `${arcId}.md`);
+    const canonicalOutlinePath = join(this.deps.projectRoot, '大纲', 'arc-1.md');
+    const legacyOutlinePath = join(this.deps.projectRoot, 'outline.md');
     let outline: string;
     try {
       outline = await readFile(outlinePath, 'utf-8');
     } catch {
-      // 尝试读取通用大纲
       try {
-        outline = await readFile(join(this.deps.projectRoot, '大纲', 'outline.md'), 'utf-8');
+        outline = await readFile(canonicalOutlinePath, 'utf-8');
       } catch {
-        return {
-          success: false,
-          outputs,
-          errors: [{ step: 'read-outline', message: `未找到大纲文件: ${outlinePath}` }],
-          stats: { durationMs: Date.now() - startTime, totalTokens: 0 },
-        };
+        try {
+          outline = await readFile(legacyOutlinePath, 'utf-8');
+        } catch {
+          return {
+            success: false,
+            outputs,
+            errors: [{ step: 'read-outline', message: `未找到大纲文件: ${outlinePath}` }],
+            stats: { durationMs: Date.now() - startTime, totalTokens: 0 },
+          };
+        }
       }
     }
 

@@ -11,5 +11,6 @@ export type {
 
 export { AnthropicProvider } from './anthropic-provider.js';
 export { OpenAIProvider } from './openai-provider.js';
+export { NewApiProvider } from './newapi-provider.js';
 export { createProvider } from './factory.js';
 export { withRetry } from './retry.js';

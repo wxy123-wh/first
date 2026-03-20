@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Architecture Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { display: flex; height: 100vh; background: #fafbfc; color: #1e293b; font-family: system-ui, sans-serif; }
+
+    #graph-container {
+      flex: 1; overflow: auto; padding: 20px;
+    }
+    #mermaid-output { min-width: 100%; min-height: 100%; display: flex; align-items: center; justify-content: center; }
+    #graph-container svg { width: 100%; height: auto; cursor: pointer; }
+
+    #sidebar {
+      width: 280px; background: #f8fafc; border-left: 1px solid #e2e8f0; font-size: 14px;
+      padding: 16px; overflow-y: auto; transition: width 0.2s;
+    }
+    #sidebar.collapsed { width: 0; padding: 0; overflow: hidden; }
+    #sidebar h2 { font-size: 16px; margin-bottom: 8px; color: #0f172a; }
+    #sidebar .keywords { color: #64748b; font-size: 13px; margin-bottom: 10px; }
+    #sidebar .description { line-height: 1.6; margin-bottom: 12px; font-size: 14px; }
+    #sidebar .risk { padding: 8px 10px; border-radius: 4px; margin-bottom: 12px; font-size: 13px; }
+    #sidebar .edges-list { font-size: 13px; }
+    #sidebar .edges-list li { margin-bottom: 6px; list-style: none; }
+    #sidebar .edges-list li::before { content: '→ '; color: #64748b; }
+    #sidebar .empty { color: #94a3b8; font-style: italic; margin-top: 40px; text-align: center; font-size: 14px; }
+
+    #toggle-sidebar {
+      position: fixed; right: 280px; top: 10px; z-index: 10;
+      background: #f1f5f9; border: none; color: #475569; padding: 6px 10px;
+      cursor: pointer; border-radius: 4px; transition: right 0.2s;
+    }
+    #toggle-sidebar.shifted { right: 10px; }
+
+    .node-expandable rect, .node-expandable polygon {
+      stroke-dasharray: 5 3 !important;
+      cursor: pointer !important;
+    }
+    .node-planned rect, .node-planned polygon {
+      stroke: #f0c040 !important; stroke-dasharray: 8 4 !important;
+      fill: #fefce8 !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="graph-container"><div id="mermaid-output"></div></div>
+  <button id="toggle-sidebar">◀</button>
+  <div id="sidebar"><p class="empty">点击节点查看详情</p></div>
+
+  <script src="mermaid.min.js"></script>
+  <script>const GRAPH_DATA = {"version":3,"projectName":"Lisan","tier":"L","techStack":"TypeScript + pnpm monorepo + Vercel AI SDK + LanceDB + SQLite + Tauri + React","direction":"LR","tierLabel":"大型项目，多个业务域，结构复杂","generatedAt":"2026-03-19T18:17:49.769Z","backend":"gitnexus","constraints":["所有LLM调用必须经过@lisan/llm抽象层","插件通过BookConfig定义写作风格","管线按固定顺序执行：decompose→plan→write→rewrite"],"nodes":{"CLI":{"label":"CLI入口","keywords":"命令行·交互·配置加载","description":"用户操作入口，提供init/decompose/plan/write/rewrite/sync/status等命令，加载配置并调度核心管线。","risk":"LOW","riskReason":"仅作为入口层，无其他模块依赖","category":"interface","children":{"src_index":{"label":"index.ts","keywords":""},"src_config":{"label":"config.ts","keywords":""},"src_commands_init":{"label":"init.ts","keywords":""},"src_commands_decompose":{"label":"decompose.ts","keywords":""},"src_commands_plan":{"label":"plan.ts","keywords":""},"src_commands_write":{"label":"write.ts","keywords":""},"src_commands_rewrite":{"label":"rewrite.ts","keywords":""},"src_commands_sync":{"label":"sync.ts","keywords":""},"src_commands_status":{"label":"status.ts","keywords":""},"src_commands_shared":{"label":"shared.ts","keywords":""}},"interfaces":[]},"Pipeline":{"label":"管线引擎","keywords":"分解·规划·写作·改写·路由","description":"核心编排系统，包含4条管线（Decompose/Plan/Write/Rewrite），通过PassRunner逐步执行，ModelRouter选择模型。","risk":"HIGH","riskReason":"依赖广度：6个模块被此模块调用，是系统核心调度中枢","category":"core","children":{"types":{"label":"types.ts","keywords":""},"pass_runner":{"label":"pass-runner.ts","keywords":""},"model_router":{"label":"model-router.ts","keywords":""},"decompose_pipeline":{"label":"decompose-pipeline.ts","keywords":""},"plan_pipeline":{"label":"plan-pipeline.ts","keywords":""},"write_pipeline":{"label":"write-pipeline.ts","keywords":""},"rewrite_pipeline":{"label":"rewrite-pipeline.ts","keywords":""},"preflight":{"label":"preflight.ts","keywords":""},"draft_parser":{"label":"draft-parser.ts","keywords":""},"index":{"label":"index.ts","keywords":""}},"interfaces":[]},"Agent":{"label":"Agent执行器","keywords":"LLM调用·提示词·执行","description":"封装LLM调用逻辑，根据Agent定义（系统提示词、模型、温度）执行推理任务并返回结果。","risk":"HIGH","riskReason":"接口暴露：所有LLM交互的唯一通道","category":"core","children":{"types":{"label":"types.ts","keywords":""},"executor":{"label":"executor.ts","keywords":""},"index":{"label":"index.ts","keywords":""},"agent_test":{"label":"agent.test.ts","keywords":""}},"interfaces":[]},"State":{"label":"状态管理","keywords":"SQLite·章节记录·实体图谱","description":"管理项目状态（章节进度、弧线信息）和实体关系图谱，使用SQLite持久化。","risk":"HIGH","riskReason":"数据所有权：拥有SQLite数据库，3个模块读取此模块数据","category":"storage","children":{"types":{"label":"types.ts","keywords":""},"file_state_manager":{"label":"file-state-manager.ts","keywords":""},"entity_graph":{"label":"entity-graph.ts","keywords":""},"index":{"label":"index.ts","keywords":""},"state_test":{"label":"state.test.ts","keywords":""}},"interfaces":[]},"Context":{"label":"上下文组装","keywords":"场景驱动·RAG检索·上下文打包","description":"ContextAgent根据当前场景从RAG和状态中检索相关信息，组装为LLM可用的上下文。","risk":"HIGH","riskReason":"依赖广度：被Pipeline调用，同时依赖RAG和State","category":"core","interfaces":[]},"Plugin":{"label":"插件系统","keywords":"BookConfig·Pass加载·扩展","description":"定义插件接口（LisanPlugin），加载BookConfig和自定义Pass，支持按类型扩展写作风格。","risk":"HIGH","riskReason":"接口暴露：外部插件通过此接口注入配置","category":"core","interfaces":[]},"Truth":{"label":"真相管理器","keywords":"设定数据·角色交互·世界状态","description":"管理小说的设定真相（settlement data）、角色交互记录和世界状态，确保写作一致性。","risk":"HIGH","riskReason":"数据所有权：维护设定一致性数据","category":"business","children":{"types":{"label":"types.ts","keywords":""},"truth_manager":{"label":"truth-manager.ts","keywords":""},"index":{"label":"index.ts","keywords":""},"truth_manager_test":{"label":"truth-manager.test.ts","keywords":""}},"interfaces":[]},"Checker":{"label":"质量检查","keywords":"草稿校验·规则检测","description":"对生成的草稿进行确定性后验证，检查格式、字数、禁用词等规则。","risk":"LOW","riskReason":"仅被Pipeline调用，无数据所有权","category":"business","interfaces":[]},"Trace":{"label":"可观测性","keywords":"事件追踪·日志·JSONL","description":"TraceWriter记录管线执行过程中的事件，输出JSONL格式追踪日志。","risk":"LOW","riskReason":"仅被Pipeline调用，无外部依赖","category":"util","interfaces":[]},"Errors":{"label":"错误定义","keywords":"错误码·异常类型","description":"定义统一的错误类型LisanError和错误码枚举LisanErrorCode。","risk":"LOW","riskReason":"基础工具模块，无数据所有权","category":"util","interfaces":[]},"LLM":{"label":"LLM抽象层","keywords":"Anthropic·OpenAI·重试·流式","description":"统一的LLM提供者抽象，封装Anthropic和OpenAI SDK，提供call/stream接口和自动重试。","risk":"HIGH","riskReason":"接口暴露：所有AI调用的唯一出口，Agent和CLI直接依赖","category":"external","children":{"src_types":{"label":"types.ts","keywords":""},"src_anthropic_provider":{"label":"anthropic-provider.ts","keywords":""},"src_openai_provider":{"label":"openai-provider.ts","keywords":""},"src_factory":{"label":"factory.ts","keywords":""},"src_retry":{"label":"retry.ts","keywords":""},"src_index":{"label":"index.ts","keywords":""}},"interfaces":[]},"RAG":{"label":"RAG向量库","keywords":"LanceDB·嵌入·语义检索·分层读取","description":"向量数据库抽象层，使用LanceDB存储文档嵌入，支持向量/BM25/混合检索和L0/L1/L2分层读取。","risk":"HIGH","riskReason":"数据所有权：拥有向量数据库，Context模块依赖此模块检索","category":"storage","children":{"src_types":{"label":"types.ts","keywords":""},"src_lancedb_store":{"label":"lancedb-store.ts","keywords":""},"src_dashscope_embedding":{"label":"dashscope-embedding.ts","keywords":""},"src_layers":{"label":"layers.ts","keywords":""},"src_index":{"label":"index.ts","keywords":""}},"interfaces":[]},"WebNovel":{"label":"网文插件","keywords":"都市异能·五遍改写·反AI检测","description":"网文写作插件，定义血色天平风格的BookConfig，包含5遍改写Pass和8个Agent定义。","risk":"LOW","riskReason":"独立插件，仅实现Plugin接口","category":"business","interfaces":[]},"Desktop":{"label":"桌面前端","keywords":"React·路由·Zustand·项目管理","description":"Tauri桌面应用的React前端，提供项目管理、执行监控和工作区界面。","risk":"LOW","riskReason":"独立前端，通过Tauri命令与后端通信","category":"interface","children":{"App":{"label":"App.tsx","keywords":""},"main":{"label":"main.tsx","keywords":""},"pages_ProjectsPage":{"label":"ProjectsPage.tsx","keywords":""},"pages_ProjectPage":{"label":"ProjectPage.tsx","keywords":""},"pages_NewProjectPage":{"label":"NewProjectPage.tsx","keywords":""},"pages_WorkspacePage":{"label":"WorkspacePage.tsx","keywords":""},"pages_ExecutionDetailPage":{"label":"ExecutionDetailPage.tsx","keywords":""},"api_cli":{"label":"cli.ts","keywords":""},"api_index":{"label":"index.ts","keywords":""},"lib_store":{"label":"store.ts","keywords":""},"lib_utils":{"label":"utils.ts","keywords":""},"lib_jsonl_parser":{"label":"jsonl-parser.ts","keywords":""},"types_lisan":{"label":"lisan.ts","keywords":""}},"interfaces":[]},"Tauri":{"label":"Tauri后端","keywords":"Rust·命令·文件·进程","description":"Tauri Rust后端，提供CLI调用、文件操作、项目管理和执行记录等命令。","risk":"HIGH","riskReason":"接口暴露：桌面应用的系统级操作入口","category":"interface","children":{"src_main":{"label":"main.rs","keywords":""},"src_lib":{"label":"lib.rs","keywords":""},"src_state":{"label":"state.rs","keywords":""},"src_commands_mod":{"label":"mod.rs","keywords":""},"src_commands_cli":{"label":"cli.rs","keywords":""},"src_commands_config":{"label":"config.rs","keywords":""},"src_commands_executions":{"label":"executions.rs","keywords":""},"src_commands_files":{"label":"files.rs","keywords":""},"src_commands_projects":{"label":"projects.rs","keywords":""}},"interfaces":[]}},"edges":[{"from":"CLI","to":"Pipeline","label":"IMPORTS","type":"IMPORTS","reverse":false},{"from":"CLI","to":"State","label":"IMPORTS","type":"IMPORTS","reverse":false},{"from":"CLI","to":"Plugin","label":"IMPORTS","type":"IMPORTS","reverse":false},{"from":"CLI","to":"LLM","label":"IMPORTS","type":"IMPORTS","reverse":false},{"from":"CLI","to":"RAG","label":"IMPORTS","type":"IMPORTS","reverse":false},{"from":"Pipeline","to":"Agent","label":"CALLS","type":"CALLS","reverse":false},{"from":"Pipeline","to":"State","label":"CALLS","type":"CALLS","reverse":false},{"from":"Pipeline","to":"Context","label":"CALLS","type":"CALLS","reverse":false},{"from":"Pipeline","to":"Checker","label":"CALLS","type":"CALLS","reverse":false},{"from":"Pipeline","to":"Truth","label":"CALLS","type":"CALLS","reverse":false},{"from":"Pipeline","to":"Trace","label":"CALLS","type":"CALLS","reverse":false},{"from":"Agent","to":"LLM","label":"CALLS","type":"CALLS","reverse":false},{"from":"Context","to":"RAG","label":"CALLS","type":"CALLS","reverse":false},{"from":"Context","to":"State","label":"READS","type":"READS","reverse":false},{"from":"State","to":"Errors","label":"IMPORTS","type":"IMPORTS","reverse":false},{"from":"Truth","to":"State","label":"READS","type":"READS","reverse":false},{"from":"Checker","to":"Errors","label":"IMPORTS","type":"IMPORTS","reverse":false},{"from":"WebNovel","to":"Plugin","label":"IMPLEMENTS","type":"IMPLEMENTS","reverse":false},{"from":"Desktop","to":"Tauri","label":"CALLS","type":"CALLS","reverse":false}]};</script>
+  <script>
+    const CATEGORY_COLORS = {
+      interface: { stroke: '#3b82f6', fillHigh: '#dbeafe', fillLow: '#ffffff' },
+      core:      { stroke: '#8b5cf6', fillHigh: '#ede9fe', fillLow: '#ffffff' },
+      business:  { stroke: '#22c55e', fillHigh: '#dcfce7', fillLow: '#ffffff' },
+      storage:   { stroke: '#f59e0b', fillHigh: '#fef3c7', fillLow: '#ffffff' },
+      external:  { stroke: '#ec4899', fillHigh: '#fce7f3', fillLow: '#ffffff' },
+      util:      { stroke: '#94a3b8', fillHigh: '#e2e8f0', fillLow: '#ffffff' }
+    };
+
+    const expandedNodes = new Set();
+
+    function escapeHtml(text) {
+      return String(text ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function escapeMermaidText(text) {
+      return String(text ?? '').replace(/"/g, '#quot;');
+    }
+
+    // Collect all known node IDs (top-level + children)
+    function getAllNodeIds() {
+      const ids = new Set();
+      for (const [id, node] of Object.entries(GRAPH_DATA.nodes)) {
+        ids.add(id);
+        if (node.children) {
+          for (const cid of Object.keys(node.children)) ids.add(cid);
+        }
+      }
+      return ids;
+    }
+
+    function isExpandable(nodeId) {
+      const node = GRAPH_DATA.nodes[nodeId];
+      return node && node.children && Object.keys(node.children).length > 0;
+    }
+
+    function buildMermaidSyntax() {
+      const lines = [`graph ${GRAPH_DATA.direction || 'LR'}`];
+      const { nodes, edges } = GRAPH_DATA;
+
+      for (const [id, node] of Object.entries(nodes)) {
+        if (expandedNodes.has(id) && node.children) {
+          lines.push(`  subgraph ${id}["${escapeMermaidText(node.label)}"]`);
+          for (const [cid, child] of Object.entries(node.children)) {
+            const childKeywords = child.keywords ? `\\n${escapeMermaidText(child.keywords)}` : '';
+            lines.push(`    ${cid}["${escapeMermaidText(child.label)}${childKeywords}"]`);
+          }
+          if (node.internalEdges) {
+            for (const e of node.internalEdges) {
+              const lbl = e.label ? ` |"${escapeMermaidText(e.label)}"| ` : ' ';
+              lines.push(`    ${e.from} -->${lbl}${e.to}`);
+            }
+          }
+          lines.push('  end');
+        } else {
+          const planned = node.planned ? ' 🟡' : '';
+          const keywords = node.keywords ? `\\n${escapeMermaidText(node.keywords)}` : '';
+          lines.push(`  ${id}["${escapeMermaidText(node.label)}${planned}${keywords}"]`);
+        }
+      }
+
+      for (const e of edges) {
+        const fromId = expandedNodes.has(e.from) && nodes[e.from]?.children
+          ? Object.keys(nodes[e.from].children).pop()
+          : e.from;
+        const toId = expandedNodes.has(e.to) && nodes[e.to]?.children
+          ? Object.keys(nodes[e.to].children)[0]
+          : e.to;
+        const lbl = e.label ? `|"${escapeMermaidText(e.label)}"| ` : '';
+        const arrow = e.reverse ? '-.->' : '-->';
+        lines.push(`  ${fromId} ${arrow}${lbl}${toId}`);
+      }
+
+      return lines.join('\n');
+    }
+
+    function getNodeEdges(nodeId) {
+      const result = [];
+      for (const e of GRAPH_DATA.edges) {
+        if (e.from === nodeId) result.push({ dir: '→', target: e.to, label: e.label, type: e.type });
+        if (e.to === nodeId) result.push({ dir: '←', target: e.from, label: e.label, type: e.type });
+      }
+      return result;
+    }
+
+    function showSidebar(nodeId) {
+      const sidebar = document.getElementById('sidebar');
+      const nodes = GRAPH_DATA.nodes;
+
+      let node = nodes[nodeId];
+      let isChild = false;
+      let parentId = null;
+
+      if (!node) {
+        for (const [pid, pnode] of Object.entries(nodes)) {
+          if (pnode.children && pnode.children[nodeId]) {
+            node = pnode.children[nodeId];
+            isChild = true;
+            parentId = pid;
+            break;
+          }
+        }
+      }
+
+      if (!node) { return; }
+
+      let html = `<h2>${escapeHtml(node.label)}</h2>`;
+      html += `<div class="keywords">${escapeHtml(node.keywords)}</div>`;
+
+      if (node.description) {
+        html += `<div class="description">${escapeHtml(node.description)}</div>`;
+      }
+
+      if (!isChild && node.risk) {
+        const cat = node.category || 'util';
+        const colors = CATEGORY_COLORS[cat] || CATEGORY_COLORS.util;
+        const bgColor = node.risk === 'HIGH' ? colors.fillHigh : '#ffffff';
+        html += `<div class="risk" style="background:${bgColor};border:1px solid ${colors.stroke};color:#1e293b;">${escapeHtml(node.risk)} RISK`;
+        if (node.riskReason) html += ` — ${escapeHtml(node.riskReason)}`;
+        html += `</div>`;
+      }
+
+      const edges = isChild
+        ? (GRAPH_DATA.nodes[parentId]?.internalEdges || [])
+            .filter(e => e.from === nodeId || e.to === nodeId)
+            .map(e => ({ dir: e.from === nodeId ? '→' : '←', target: e.from === nodeId ? e.to : e.from, label: e.label, type: e.type }))
+        : getNodeEdges(nodeId);
+
+      if (edges.length > 0) {
+        html += `<h3 style="margin-top:12px;margin-bottom:6px;font-size:0.95em;">连接</h3><ul class="edges-list">`;
+        for (const e of edges) {
+          const targetLabel = findLabel(e.target);
+          const edgeLabel = `${escapeHtml(e.type)}${e.label ? ': ' + escapeHtml(e.label) : ''}`;
+          html += `<li>${escapeHtml(e.dir)} ${escapeHtml(targetLabel)} (${edgeLabel})</li>`;
+        }
+        html += `</ul>`;
+      }
+
+      if (isExpandable(nodeId)) {
+        const action = expandedNodes.has(nodeId) ? '收起' : '展开';
+        html += `<button id="toggle-expand-btn" style="margin-top:12px;padding:6px 16px;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;">${action}子模块</button>`;
+      }
+
+      sidebar.innerHTML = html;
+      if (isExpandable(nodeId)) {
+        const btn = document.getElementById('toggle-expand-btn');
+        if (btn) btn.addEventListener('click', () => toggleExpand(nodeId));
+      }
+    }
+
+    function findLabel(nodeId) {
+      if (GRAPH_DATA.nodes[nodeId]) return GRAPH_DATA.nodes[nodeId].label;
+      for (const n of Object.values(GRAPH_DATA.nodes)) {
+        if (n.children && n.children[nodeId]) return n.children[nodeId].label;
+      }
+      return nodeId;
+    }
+
+    function toggleExpand(nodeId) {
+      if (expandedNodes.has(nodeId)) {
+        expandedNodes.delete(nodeId);
+      } else {
+        expandedNodes.add(nodeId);
+      }
+      renderGraph();
+      showSidebar(nodeId);
+    }
+
+    function findNodeIdFromElement(el) {
+      // Walk up from clicked element to find a node group with a known ID
+      let current = el;
+      while (current && current !== document) {
+        if (current.id) {
+          // Mermaid v11 uses id patterns like "flowchart-NodeId-123" for nodes
+          const match = current.id.match(/^flowchart-(\w+)-/);
+          if (match) {
+            const allIds = getAllNodeIds();
+            if (allIds.has(match[1])) return match[1];
+          }
+          // Also check for subgraph labels which use the node ID directly
+          const allIds = getAllNodeIds();
+          if (allIds.has(current.id)) return current.id;
+        }
+        // Check data-id attribute (some mermaid versions use this)
+        if (current.dataset && current.dataset.id) {
+          const allIds = getAllNodeIds();
+          if (allIds.has(current.dataset.id)) return current.dataset.id;
+        }
+        current = current.parentElement;
+      }
+      return null;
+    }
+
+    let renderCount = 0;
+
+    async function renderGraph() {
+      const syntax = buildMermaidSyntax();
+      const container = document.getElementById('mermaid-output');
+      try {
+        renderCount++;
+        const { svg } = await mermaid.render('mermaid-graph-' + renderCount, syntax);
+        container.innerHTML = svg;
+
+        // Single click handler via event delegation on the SVG
+        const svgEl = container.querySelector('svg');
+        if (svgEl) {
+          // Remove Mermaid's inline max-width so SVG fills the container
+          svgEl.style.maxWidth = 'none';
+          svgEl.removeAttribute('width');
+          svgEl.addEventListener('click', (e) => {
+            const nodeId = findNodeIdFromElement(e.target);
+            if (nodeId) {
+              showSidebar(nodeId);
+              // Double-click to expand (single click = sidebar only)
+            }
+          });
+          svgEl.addEventListener('dblclick', (e) => {
+            const nodeId = findNodeIdFromElement(e.target);
+            if (nodeId && isExpandable(nodeId)) {
+              toggleExpand(nodeId);
+            }
+          });
+        }
+
+        // Style nodes — dynamic category coloring
+        for (const [id, node] of Object.entries(GRAPH_DATA.nodes)) {
+          const el = container.querySelector(`[id*="flowchart-${id}-"]`);
+          if (!el) continue;
+          if (node.children) el.classList.add('node-expandable');
+          if (node.planned) el.classList.add('node-planned');
+          el.style.cursor = 'pointer';
+
+          const cat = node.category || 'util';
+          const colors = CATEGORY_COLORS[cat] || CATEGORY_COLORS.util;
+          const shapes = el.querySelectorAll('rect, polygon');
+          for (const shape of shapes) {
+            shape.style.stroke = colors.stroke;
+            shape.style.strokeWidth = node.risk === 'HIGH' ? '2px' : '1.5px';
+            shape.style.fill = node.risk === 'HIGH' ? colors.fillHigh : colors.fillLow;
+          }
+
+          // Style expanded children — inherit parent stroke, white fill
+          if (expandedNodes.has(id) && node.children) {
+            for (const childId of Object.keys(node.children)) {
+              const childEl = container.querySelector(`[id*="flowchart-${childId}-"]`);
+              if (!childEl) continue;
+              const childShapes = childEl.querySelectorAll('rect, polygon');
+              for (const shape of childShapes) {
+                shape.style.stroke = colors.stroke;
+                shape.style.strokeWidth = '1.5px';
+                shape.style.fill = '#ffffff';
+              }
+            }
+          }
+        }
+      } catch (err) {
+        container.innerHTML = `<pre style="color:#dc2626;">Render error: ${escapeHtml(err.message)}</pre>`;
+      }
+    }
+
+    document.getElementById('toggle-sidebar').addEventListener('click', () => {
+      document.getElementById('sidebar').classList.toggle('collapsed');
+      document.getElementById('toggle-sidebar').classList.toggle('shifted');
+      document.getElementById('toggle-sidebar').textContent =
+        document.getElementById('sidebar').classList.contains('collapsed') ? '▶' : '◀';
+    });
+
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: 'base',
+      themeVariables: {
+        background: '#fafbfc',
+        primaryColor: '#f1f5f9',
+        primaryBorderColor: '#94a3b8',
+        primaryTextColor: '#1e293b',
+        lineColor: '#94a3b8',
+        secondaryColor: '#f8fafc',
+        tertiaryColor: '#f1f5f9',
+        fontFamily: 'system-ui, sans-serif',
+        fontSize: '14px'
+      },
+      securityLevel: 'loose'
+    });
+    renderGraph();
+  </script>
+</body>
+</html>

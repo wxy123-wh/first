@@ -1,135 +1,85 @@
-# Lisan — 技术架构规划
+﻿# Lisan 架构说明（当前实现）
 
-> WebNovel Writer 的独立软件化版本。
-> 将 AI 驱动的网文写作管线从 OpenClaw 中解耦，构建为标准化 CLI 工具。
+## 1. 目标与范围
 
----
+Lisan 当前是一个桌面优先的 AI 写作系统：
+- 前端：React + Tauri
+- 本地桥接：Rust（Tauri command）
+- 执行核心：Node sidecar（`@lisan/engine`）
+- 基础能力：LLM / RAG / 本地 SQLite 与文件系统
 
-## Monorepo 结构
+本文件只描述“已实现代码”，不再记录历史计划。
 
-```
-lisan/
-├── packages/
-│   ├── llm/           # @lisan/llm — LLM 调用封装（多 provider 统一接口）
-│   │   └── src/
-│   │       ├── types.ts              # LLMProvider/LLMCallOptions/LLMStreamChunk 接口
-│   │       ├── anthropic-provider.ts # Anthropic 实现（Vercel AI SDK）
-│   │       ├── openai-provider.ts    # OpenAI 实现（Vercel AI SDK）
-│   │       ├── factory.ts            # createProvider() 工厂函数
-│   │       ├── retry.ts              # p-retry 指数退避重试
-│   │       └── index.ts
-│   ├── rag/           # @lisan/rag — 向量数据库封装（LanceDB + embedding）
-│   │   └── src/
-│   │       ├── types.ts              # Document/SearchQuery/VectorStore 接口
-│   │       ├── lancedb-store.ts      # LanceDB 完整实现
-│   │       ├── dashscope-embedding.ts # DashScope text-embedding-v3 实现
-│   │       ├── layers.ts             # L0/L1/L2 三层渐进式读取
-│   │       └── index.ts
-│   ├── core/          # @lisan/core — 核心引擎
-│   │   └── src/
-│   │       ├── errors/               # LisanError + LisanErrorCode
-│   │       ├── state/                # FileStateManager + SqliteEntityGraph
-│   │       ├── agent/                # AgentExecutor（prompt 模板注入 + token 统计）
-│   │       ├── pipeline/
-│   │       │   ├── types.ts              # Pipeline/Pass/PassDefinition 接口
-│   │       │   ├── pass-runner.ts        # PassRunner（串行执行 + 单 Pass 重跑）
-│   │       │   ├── preflight.ts          # Preflight 校验（scenes.md/chapter-plan.md/.lisan）
-│   │       │   ├── model-router.ts       # ModelRouter（编排器/执行器模型路由）
-│   │       │   ├── decompose-pipeline.ts # DecomposePipeline（大纲→场景树分解）
-│   │       │   ├── plan-pipeline.ts      # PlanPipeline（场景树→章节规划生成）
-│   │       │   ├── write-pipeline.ts     # WritePipeline 完整实现（6 步管线）
-│   │       │   └── rewrite-pipeline.ts   # RewritePipeline（已有章节改写管线）
-│   │       ├── context/
-│   │       │   ├── types.ts          # SceneDefinition/ContextPack/GeneratedCharacter
-│   │       │   └── context-agent.ts  # ContextAgent（章节规划解析+场景组装+自主创角+RAG检索）
-│   │       ├── plugin/
-│   │       │   ├── types.ts          # BookConfig/LisanPlugin 接口
-│   │       │   └── loader.ts         # loadPlugin() 动态插件加载器
-│   │       ├── observability/        # TraceWriter（JSONL 追踪日志）
-│   │       └── index.ts
-│   └── cli/           # @lisan/cli — CLI 入口
-│       └── src/
-│           ├── config.ts             # cosmiconfig + zod 配置加载验证
-│           ├── commands/
-│           │   ├── shared.ts         # 共享工具（createEmbeddingProvider/createVectorStore）
-│           │   ├── init.ts           # lisan init
-│           │   ├── decompose.ts      # lisan decompose（对接 DecomposePipeline + ora + confirm）
-│           │   ├── plan.ts           # lisan plan（对接 PlanPipeline + ora + confirm）
-│           │   ├── write.ts          # lisan write（对接 WritePipeline + ora + confirm）
-│           │   ├── rewrite.ts        # lisan rewrite（对接 RewritePipeline + ora + confirm）
-│           │   ├── sync.ts           # lisan sync（embedding 同步 + git commit + ora + confirm）
-│           │   └── status.ts         # lisan status
-│           └── index.ts              # Commander.js 入口
-├── plugins/
-│   └── webnovel/      # @lisan/plugin-webnovel — 网文写作插件
-│       └── src/
-│           └── index.ts              # 血色天平风格 BookConfig
-├── pnpm-workspace.yaml
-├── package.json
-└── tsconfig.base.json
-```
+## 2. 分层架构
 
-## 技术栈
+### 2.1 UI 层（`lisan-desktop/src`）
 
-| 层 | 选型 |
-|----|------|
-| 语言 | TypeScript 5.x (ESM + strict) |
-| 运行时 | Node.js 22+ (Volta pinned 24.14.0) |
-| 包管理 | pnpm workspace |
-| 构建 | tsup (ESM + CJS) |
-| 测试 | vitest ^4.1.0 |
-| LLM SDK | Vercel AI SDK (`ai` + `@ai-sdk/anthropic` + `@ai-sdk/openai`) |
-| 向量库 | LanceDB (嵌入式) |
-| 实体图谱 | SQLite (`better-sqlite3`) |
-| CLI | Commander.js v12 |
-| 配置 | cosmiconfig + zod |
+- 路由页面：项目、纲要、场景、章节、工作流、智能体、Provider、执行详情、设置
+- 状态中心：`zustand`（当前项目、sidecar 状态、实时工作流事件）
+- 统一 API：`useSidecar()`，通过 Tauri `invoke` 调用 Rust command
 
-## 包依赖关系
+### 2.2 桥接层（`lisan-desktop/src-tauri/src`）
 
-```
-@lisan/cli → @lisan/core → @lisan/llm
-                          → @lisan/rag
-@lisan/plugin-webnovel → @lisan/core
-```
+- `commands/mod.rs`：定义全部 Tauri command
+- `sidecar.rs`：sidecar 生命周期管理、JSON-RPC 请求、超时、重启、事件转发
+- `commands/projects.rs`：本地项目扫描/初始化/删除（不经 sidecar）
 
-## 当前状态
+### 2.3 运行时层（`packages/engine/src`）
 
-全部功能完成。5 个包构建零错误，7 个测试文件 58 个单元/集成测试全部通过。
+- `store/`：SQLite 数据模型 + 凭据加密 + 文件路径迁移
+- `agent/`：内置/自定义 Agent 注册、管理与执行
+- `workflow/`：上下文构建、默认工作流推断、运行时执行控制
+- `sidecar/main.ts`：JSON-RPC 服务入口
+- `truth/`：真相文件模板、读写、结算更新
+- `checker/`：确定性后验证器（11 条规则）
 
-### 已完成
-- Monorepo 骨架（pnpm workspace + tsup 构建 + vitest 测试框架）
-- `@lisan/llm`：LLMProvider 接口 + Anthropic/OpenAI 实现 + 工厂函数 + p-retry 指数退避重试 + AbortSignal 超时 + 单元测试（5 tests）
-- `@lisan/rag`：VectorStore 接口 + LanceDB 完整实现（init/upsert/search/delete/getById/close）+ 向量检索 + FTS 全文搜索 + metadata.type 过滤 + L0/L1/L2 读取 + DashScope text-embedding-v3 实现（分批处理 + 排序保证）+ 单元测试（16 tests）
-- `@lisan/core`：
-  - 错误体系（LisanError + 12 个错误码）
-  - FileStateManager 完整实现 + schema 版本检测与链式迁移框架（registerMigration）+ 单元测试（5 tests）
-  - SqliteEntityGraph 完整实现（better-sqlite3, WAL 模式, 索引优化, CRUD + findNeedsReview）+ 单元测试（9 tests）
-  - AgentExecutor（prompt {{key}} 模板注入 + token 统计 + 耗时记录）+ 单元测试（6 tests）
-  - PassRunner（串行执行 + 单 Pass 重跑）
-  - Preflight 校验（scenes.md / chapter-plan.md / .lisan 目录检查）+ 单元测试（3 tests）
-  - ModelRouter（编排器/执行器模型路由，按 AgentDefinition.model 匹配）+ 单元测试（1 test）
-  - ContextAgent 完整实现（chapter-plan.md 解析 + scenes.md 解析 + 上章尾部读取 + RAG 设定检索 + 实体图谱角色卡 + 自主创角 + 持久化分级 + permanent needsReview 标记）
-  - WritePipeline 完整 6 步管线（Context Agent → Draft Agent → 5 Pass 改写链 → Review Agent → Data Agent → Git commit）+ 插件 Pass 覆盖机制 + 集成测试（3 tests）
-  - DecomposePipeline（读取大纲 → RAG 设定检索 → LLM 场景分解 → 写入 scenes.md）+ 单元测试（3 tests）
-  - PlanPipeline（读取场景树 → RAG 设定检索 → LLM 章节规划 → 写入 chapter-plan.md）+ 单元测试（3 tests）
-  - RewritePipeline（Context Agent → 读取已有正文 → Pass 改写链 → Review Agent → 写回文件 + Git commit）+ 单元测试（4 tests）
-  - 插件加载器 loadPlugin()（内置插件表 + npm 包动态 import + 本地路径支持）
-  - TraceWriter JSONL 追踪日志
-- `@lisan/cli`：
-  - Commander.js 入口 + 全部 7 个子命令（init/decompose/plan/write/rewrite/sync/status）
-  - cosmiconfig 配置加载 + zod schema 验证 + 环境变量 ${VAR} 替换
-  - 共享工具模块 shared.ts（createEmbeddingProvider/createVectorStore）
-  - decompose 命令完整对接 DecomposePipeline（--yes 跳过确认 + ora 进度条）
-  - plan 命令完整对接 PlanPipeline（--yes + ora）
-  - write 命令完整对接 WritePipeline（--batch/--dry-run/--no-git/--rerun-pass/--yes + ora）
-  - rewrite 命令完整对接 RewritePipeline（--no-git/--rerun-pass/--yes + ora）
-  - sync 命令完整实现（递归扫描 Markdown → 分批 embedding upsert → git commit + --no-git/--yes + ora）
-  - 所有命令集成 @inquirer/prompts 交互式确认 + ora 进度条
-- `@lisan/plugin-webnovel`：血色天平风格 BookConfig（4 爽点类型 + 9 Agent + 5 Pass + createPass 覆盖接口）
+### 2.4 能力层（`packages/llm`, `packages/rag`）
 
-### 待实现（v7.1）
-- 确定性后验证器（Post-Write Checker）：零 LLM 成本的 11 条规则检查，注入 Pass prompt
-- 真相文件体系（Truth Files）：`truth/` 目录下的世界状态快照、伏笔追踪表、角色交互矩阵
-- 写前自检 / 写后结算（PRE_WRITE_CHECK / POST_SETTLEMENT）：Draft Agent 三阶段输出 + 真相文件自动更新
+- `@lisan/llm`：Anthropic/OpenAI/NewAPI Provider 抽象
+- `@lisan/rag`：LanceDB 向量存储 + DashScope Embedding + 分层读取（L0/L1/L2）
 
-详见 `openspec/changes/v7.1-upgrade/spec.md`
+### 2.5 兼容层（保留）
+
+- `@lisan/core`：旧核心包（`deprecated`）
+- `@lisan/cli`：旧 CLI 包（`deprecated`）
+- `@lisan/plugin-webnovel`：旧插件包（`deprecated`）
+
+## 3. 数据与调用流
+
+### 3.1 UI 调用链
+
+1. 页面调用 `useSidecar()` 方法
+2. `invoke("xxx_command")` 进入 Rust command
+3. Rust command 转换参数并调用 sidecar JSON-RPC
+4. sidecar 调用 Engine（Store/Workflow/Agent）
+5. 结果回传 UI，事件通过 `sidecar:notification` 推送
+
+### 3.2 工作流执行链
+
+1. 创建 execution 记录（`executions` + `execution_steps`）
+2. 逐步骤渲染模板并执行 Agent
+3. 写入 step 输出、tokens、duration
+4. 触发事件：`step:start/complete/failed`、`workflow:complete`
+5. 若输出为场景 JSON，自动去重落库到 `scenes`
+
+## 4. 已实现能力清单
+
+- 项目管理：创建、枚举、删除 `.lisan` 工作目录
+- 纲要管理：读取/保存 `大纲/arc-1.md`
+- 场景管理：树结构展示、增删改、排序、AI 拆解
+- 章节管理：创建章节、编辑正文、绑定工作流并运行
+- 工作流管理：场景/章节工作流编辑、步骤拖拽排序、配置覆盖
+- 智能体管理：内置 Agent 引导、自定义 Agent、复制内置并替换引用
+- Provider 管理：模型/URL/API Key 配置，数据库密钥加密存储
+- 执行监控：列表/详情、实时事件、暂停/恢复/跳过/终止
+- Sidecar 稳定性：掉线重启、请求超时、方法回退、构建一致性校验
+- 真相文件体系：模板初始化、结算写入、滞留伏笔标记
+- 确定性检查器：11 条文风规则，输出错误/警告摘要
+
+## 5. 关键实现注意点
+
+- Provider API Key 不再明文落库：`providers.apiKeyCiphertext` + 本地 AES-GCM 密钥文件
+- `outline.md` 会迁移到 `大纲/arc-1.md`
+- `workflow.kind` 缺失时自动推断并回填数据库
+- Rust command 对旧/新 RPC 名称有 fallback（例如 `workflow.run` / `workflow.rerun`）
+- sidecar 启动前会校验 `packages/engine/src` 是否晚于 `dist/sidecar`，防止“代码更新但 sidecar 未重建”

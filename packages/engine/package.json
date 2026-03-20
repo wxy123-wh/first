@@ -1,0 +1,30 @@
+{
+  "name": "@lisan/engine",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:stabilization": "vitest run src/store/store-manager.test.ts src/store/database.test.ts src/workflow/defaults.test.ts src/workflow/runtime.test.ts src/integration.test.ts src/e2e-smoke.test.ts",
+    "smoke:e2e": "vitest run src/e2e-smoke.test.ts"
+  },
+  "dependencies": {
+    "@lisan/llm": "workspace:*",
+    "@lisan/rag": "workspace:*",
+    "better-sqlite3": "^11.10.0",
+    "nanoid": "^5.1.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.0"
+  }
+}

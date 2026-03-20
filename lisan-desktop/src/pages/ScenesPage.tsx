@@ -1,0 +1,298 @@
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import SceneCard from "@/components/SceneCard";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useSidecar } from "@/hooks/useSidecar";
+import { useAppStore } from "@/lib/store";
+import { pickSceneWorkflow } from "@/lib/workflow-kind";
+import type { Chapter, SceneCard as SceneCardType, TagTemplateEntry } from "@/types/engine";
+
+interface SceneRow {
+  scene: SceneCardType;
+  depth: number;
+}
+
+interface SceneSaveInput extends Omit<SceneCardType, "createdAt" | "updatedAt"> {
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+function flattenSceneTree(scenes: SceneCardType[]): SceneRow[] {
+  const byParent = new Map<string | null, SceneCardType[]>();
+  for (const scene of scenes) {
+    const parentKey = scene.parentId ?? null;
+    const group = byParent.get(parentKey) ?? [];
+    group.push(scene);
+    byParent.set(parentKey, group);
+  }
+
+  const ordered = new Map<string | null, SceneCardType[]>();
+  for (const [key, group] of byParent.entries()) {
+    ordered.set(
+      key,
+      [...group].sort((a, b) => a.order - b.order || a.createdAt.localeCompare(b.createdAt)),
+    );
+  }
+
+  const rows: SceneRow[] = [];
+  const visit = (parentId: string | null, depth: number) => {
+    const children = ordered.get(parentId) ?? [];
+    for (const child of children) {
+      rows.push({ scene: child, depth });
+      visit(child.id, depth + 1);
+    }
+  };
+
+  visit(null, 0);
+
+  const missingParentScenes = scenes.filter(
+    (scene) => scene.parentId && !scenes.some((candidate) => candidate.id === scene.parentId),
+  );
+  for (const scene of missingParentScenes) {
+    if (!rows.some((row) => row.scene.id === scene.id)) {
+      rows.push({ scene, depth: 0 });
+    }
+  }
+
+  return rows;
+}
+
+export default function ScenesPage() {
+  const sidecar = useSidecar();
+  const navigate = useNavigate();
+  const { id: routeProjectId } = useParams<{ id: string }>();
+  const currentProject = useAppStore((state) => state.currentProject);
+
+  const [loading, setLoading] = useState(true);
+  const [savingSceneId, setSavingSceneId] = useState<string | null>(null);
+  const [decomposing, setDecomposing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [chapterFilter, setChapterFilter] = useState("all");
+  const [sceneTagTemplate, setSceneTagTemplate] = useState<TagTemplateEntry[]>([]);
+  const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [scenes, setScenes] = useState<SceneCardType[]>([]);
+
+  const loadData = async () => {
+    if (!currentProject?.id) {
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const [project, chapterList, sceneList] = await Promise.all([
+        sidecar.projectGet(currentProject.id),
+        sidecar.chapterList(currentProject.id),
+        sidecar.sceneList(currentProject.id),
+      ]);
+      setSceneTagTemplate(project.sceneTagTemplate);
+      setChapters(chapterList);
+      setScenes(sceneList);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadData();
+  }, [currentProject?.id]);
+
+  const visibleRows = useMemo(() => {
+    const rows = flattenSceneTree(scenes);
+    if (chapterFilter === "all") {
+      return rows;
+    }
+    return rows.filter((row) => row.scene.chapterId === chapterFilter);
+  }, [chapterFilter, scenes]);
+
+  const saveScene = async (scene: SceneCardType) => {
+    setSavingSceneId(scene.id);
+    setError(null);
+    try {
+      await sidecar.sceneSave(scene as SceneSaveInput);
+      await loadData();
+      setNotice("场景已保存。");
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSavingSceneId(null);
+    }
+  };
+
+  const createEmptyScene = async () => {
+    if (!currentProject?.id) {
+      return;
+    }
+
+    setError(null);
+    try {
+      const maxOrder = scenes.reduce((value, scene) => Math.max(value, scene.order), -1);
+      await sidecar.sceneSave({
+        projectId: currentProject.id,
+        chapterId: chapterFilter !== "all" ? chapterFilter : undefined,
+        order: maxOrder + 1,
+        title: `新场景 ${maxOrder + 2}`,
+        characters: [],
+        location: "",
+        eventSkeleton: [],
+        tags: {},
+        sourceOutline: "",
+      });
+      await loadData();
+      setNotice("已创建空白场景。");
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const deleteScene = async (sceneId: string) => {
+    setError(null);
+    try {
+      await sidecar.sceneDelete(sceneId);
+      await loadData();
+      setNotice("场景已删除。");
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const moveScene = async (sceneId: string, direction: "up" | "down") => {
+    const ordered = [...scenes].sort((a, b) => a.order - b.order);
+    const index = ordered.findIndex((scene) => scene.id === sceneId);
+    if (index === -1) {
+      return;
+    }
+    const swapIndex = direction === "up" ? index - 1 : index + 1;
+    if (swapIndex < 0 || swapIndex >= ordered.length) {
+      return;
+    }
+    const [moved] = ordered.splice(index, 1);
+    ordered.splice(swapIndex, 0, moved);
+    try {
+      await sidecar.sceneReorder(ordered.map((scene) => scene.id));
+      await loadData();
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  };
+
+  const runAiDecompose = async () => {
+    if (!currentProject?.id) {
+      return;
+    }
+
+    setDecomposing(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const [workflows, outline] = await Promise.all([
+        sidecar.workflowList(currentProject.id),
+        sidecar.outlineGet(),
+      ]);
+      const workflow = pickSceneWorkflow(workflows);
+      if (!workflow) {
+        throw new Error("未找到场景工作流，请先在“工作流”页创建场景工作流。");
+      }
+      await sidecar.workflowRun({
+        workflowId: workflow.id,
+        globalContext: {
+          sourceOutline: outline,
+        },
+      });
+      setNotice("场景拆解流程已启动，正在跳转到执行页。");
+      if (routeProjectId) {
+        navigate(`/projects/${routeProjectId}/executions`);
+      }
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setDecomposing(false);
+    }
+  };
+
+  if (!currentProject?.id) {
+    return <p className="text-sm text-muted-foreground">请先打开项目。</p>;
+  }
+
+  if (loading) {
+    return <p className="text-sm text-muted-foreground">正在加载场景数据...</p>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="text-lg font-semibold">场景卡片</h2>
+        <div className="flex flex-wrap gap-2">
+          <Select value={chapterFilter} onValueChange={(value) => setChapterFilter(value ?? "all")}>
+            <SelectTrigger className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部章节</SelectItem>
+              {chapters.map((chapter) => (
+                <SelectItem key={chapter.id} value={chapter.id}>
+                  第{chapter.number}章 {chapter.title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button variant="outline" onClick={createEmptyScene}>
+            新建空白场景
+          </Button>
+          <Button onClick={runAiDecompose} disabled={decomposing}>
+            {decomposing ? "生成中..." : "AI 生成场景"}
+          </Button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      )}
+      {notice && (
+        <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700">
+          {notice}
+        </div>
+      )}
+
+      {visibleRows.length === 0 ? (
+        <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+          当前筛选条件下没有场景。你可以先点“AI 生成场景”或手动新建。
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          {visibleRows.map((row, index) => (
+            <SceneCard
+              key={row.scene.id}
+              scene={row.scene}
+              depth={row.depth}
+              sceneTagTemplate={sceneTagTemplate}
+              onSave={saveScene}
+              onDelete={deleteScene}
+              onMoveUp={() => moveScene(row.scene.id, "up")}
+              onMoveDown={() => moveScene(row.scene.id, "down")}
+              canMoveUp={index > 0}
+              canMoveDown={index < visibleRows.length - 1}
+            />
+          ))}
+        </div>
+      )}
+
+      {savingSceneId && (
+        <p className="text-xs text-muted-foreground">正在保存场景：{savingSceneId}</p>
+      )}
+    </div>
+  );
+}
