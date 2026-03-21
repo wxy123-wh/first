@@ -14,3 +14,9 @@ export type { LanceDBStoreConfig } from './lancedb-store.js';
 export { DashScopeEmbeddingProvider } from './dashscope-embedding.js';
 export type { DashScopeEmbeddingConfig } from './dashscope-embedding.js';
 export { readL0, readL1, readL2 } from './layers.js';
+export {
+  DEFAULT_SYNC_DIRS,
+  scanMarkdownFiles,
+  inferDocumentType,
+  collectSyncMarkdownFiles,
+} from './sync-utils.js';

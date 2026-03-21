@@ -25,6 +25,7 @@ interface SceneSaveInput extends Omit<SceneCardType, "createdAt" | "updatedAt"> 
 }
 
 const UNBOUND_FILTER = "__unbound__";
+type SceneBindMode = "unbound" | "chapter";
 
 function flattenSceneTree(scenes: SceneCardType[]): SceneRow[] {
   const byParent = new Map<string | null, SceneCardType[]>();
@@ -75,15 +76,16 @@ export default function ScenesPage() {
   const [loading, setLoading] = useState(true);
   const [savingSceneId, setSavingSceneId] = useState<string | null>(null);
   const [decomposing, setDecomposing] = useState(false);
-  const [repairing, setRepairing] = useState(false);
+  const [batchProcessing, setBatchProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [chapterFilter, setChapterFilter] = useState("all");
   const [sceneTagTemplate, setSceneTagTemplate] = useState<TagTemplateEntry[]>([]);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [scenes, setScenes] = useState<SceneCardType[]>([]);
+  const [decomposeBindMode, setDecomposeBindMode] = useState<SceneBindMode>("unbound");
   const [decomposeChapterId, setDecomposeChapterId] = useState<string>("");
-  const [repairChapterId, setRepairChapterId] = useState<string>("");
+  const [batchChapterId, setBatchChapterId] = useState<string>("");
 
   const loadData = async () => {
     if (!currentProject?.id) {
@@ -108,7 +110,7 @@ export default function ScenesPage() {
         }
         return chapterList[0]?.id ?? "";
       });
-      setRepairChapterId((current) => {
+      setBatchChapterId((current) => {
         if (current && chapterList.some((chapter) => chapter.id === current)) {
           return current;
         }
@@ -135,7 +137,17 @@ export default function ScenesPage() {
     }
     return rows.filter((row) => row.scene.chapterId === chapterFilter);
   }, [chapterFilter, scenes]);
-  const unboundCount = useMemo(() => scenes.filter((scene) => !scene.chapterId).length, [scenes]);
+  const visibleScenes = useMemo(() => visibleRows.map((row) => row.scene), [visibleRows]);
+  const bindableCount = useMemo(() => {
+    if (!batchChapterId) {
+      return 0;
+    }
+    return visibleScenes.filter((scene) => scene.chapterId !== batchChapterId).length;
+  }, [batchChapterId, visibleScenes]);
+  const unbindableCount = useMemo(
+    () => visibleScenes.filter((scene) => typeof scene.chapterId === "string" && scene.chapterId.length > 0).length,
+    [visibleScenes],
+  );
 
   const saveScene = async (scene: SceneCardType) => {
     setSavingSceneId(scene.id);
@@ -213,6 +225,11 @@ export default function ScenesPage() {
     if (!currentProject?.id) {
       return;
     }
+    const shouldBindChapter = decomposeBindMode === "chapter";
+    if (shouldBindChapter && !decomposeChapterId) {
+      setError("请选择绑定目标章节，或切换为“不绑定章节”。");
+      return;
+    }
 
     setDecomposing(true);
     setError(null);
@@ -228,15 +245,17 @@ export default function ScenesPage() {
       }
       await sidecar.workflowRun({
         workflowId: workflow.id,
-        chapterId: decomposeChapterId,
+        chapterId: shouldBindChapter ? decomposeChapterId : undefined,
         globalContext: {
           sourceOutline: outline,
         },
       });
-      const targetChapter = chapters.find((chapter) => chapter.id === decomposeChapterId);
+      const targetChapter = shouldBindChapter
+        ? chapters.find((chapter) => chapter.id === decomposeChapterId)
+        : undefined;
       const chapterLabel = targetChapter
         ? `第${targetChapter.number}章 ${targetChapter.title}`
-        : "目标章节";
+        : "未绑定章节";
       setNotice(`场景拆解流程已启动（${chapterLabel}），正在跳转到执行页。`);
       if (routeProjectId) {
         navigate(`/projects/${routeProjectId}/executions`);
@@ -248,37 +267,67 @@ export default function ScenesPage() {
     }
   };
 
-  const repairUnboundScenes = async () => {
-    if (!repairChapterId) {
-      setError("请先选择修复目标章节。");
+  const bindScenesToChapter = async () => {
+    if (!batchChapterId) {
+      setError("请先选择批量绑定目标章节。");
       return;
     }
-    const unboundScenes = scenes.filter((scene) => !scene.chapterId);
-    if (unboundScenes.length === 0) {
-      setNotice("当前没有未绑定章节的场景。");
+    const targetScenes = visibleScenes.filter((scene) => scene.chapterId !== batchChapterId);
+    if (targetScenes.length === 0) {
+      setNotice("当前筛选范围下，所有场景已绑定到目标章节。");
       return;
     }
 
-    setRepairing(true);
+    setBatchProcessing(true);
     setError(null);
     setNotice(null);
     try {
       await Promise.all(
-        unboundScenes.map((scene) =>
+        targetScenes.map((scene) =>
           sidecar.sceneSave({
             ...scene,
-            chapterId: repairChapterId,
+            chapterId: batchChapterId,
           }),
         ),
       );
       await loadData();
-      const chapter = chapters.find((item) => item.id === repairChapterId);
+      const chapter = chapters.find((item) => item.id === batchChapterId);
       const chapterLabel = chapter ? `第${chapter.number}章 ${chapter.title}` : "目标章节";
-      setNotice(`已将 ${unboundScenes.length} 个未绑定场景修复到 ${chapterLabel}。`);
+      setNotice(`已将 ${targetScenes.length} 个场景批量绑定到 ${chapterLabel}。`);
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setRepairing(false);
+      setBatchProcessing(false);
+    }
+  };
+
+  const unbindScenesFromChapter = async () => {
+    const targetScenes = visibleScenes.filter(
+      (scene) => typeof scene.chapterId === "string" && scene.chapterId.length > 0,
+    );
+    if (targetScenes.length === 0) {
+      setNotice("当前筛选范围下没有可解绑章节的场景。");
+      return;
+    }
+
+    setBatchProcessing(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await Promise.all(
+        targetScenes.map((scene) =>
+          sidecar.sceneSave({
+            ...scene,
+            chapterId: undefined,
+          }),
+        ),
+      );
+      await loadData();
+      setNotice(`已将 ${targetScenes.length} 个场景批量解绑章节。`);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBatchProcessing(false);
     }
   };
 
@@ -309,8 +358,20 @@ export default function ScenesPage() {
               ))}
             </SelectContent>
           </Select>
+          <Select
+            value={decomposeBindMode}
+            onValueChange={(value) => setDecomposeBindMode(value === "chapter" ? "chapter" : "unbound")}
+          >
+            <SelectTrigger className="w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unbound">不绑定章节</SelectItem>
+              <SelectItem value="chapter">绑定到章节</SelectItem>
+            </SelectContent>
+          </Select>
           <Select value={decomposeChapterId} onValueChange={(value) => setDecomposeChapterId(value ?? "")}>
-            <SelectTrigger className="w-48">
+            <SelectTrigger className="w-48" disabled={decomposeBindMode !== "chapter" || chapters.length === 0}>
               <SelectValue placeholder="拆解目标章节" />
             </SelectTrigger>
             <SelectContent>
@@ -324,12 +385,15 @@ export default function ScenesPage() {
           <Button variant="outline" onClick={createEmptyScene}>
             新建空白场景
           </Button>
-          <Button onClick={runAiDecompose} disabled={decomposing || !decomposeChapterId}>
+          <Button
+            onClick={runAiDecompose}
+            disabled={decomposing || (decomposeBindMode === "chapter" && !decomposeChapterId)}
+          >
             {decomposing ? "生成中..." : "AI 生成场景"}
           </Button>
-          <Select value={repairChapterId} onValueChange={(value) => setRepairChapterId(value ?? "")}>
+          <Select value={batchChapterId} onValueChange={(value) => setBatchChapterId(value ?? "")}>
             <SelectTrigger className="w-48">
-              <SelectValue placeholder="修复到章节" />
+              <SelectValue placeholder="批量绑定到章节" />
             </SelectTrigger>
             <SelectContent>
               {chapters.map((chapter) => (
@@ -341,10 +405,17 @@ export default function ScenesPage() {
           </Select>
           <Button
             variant="outline"
-            onClick={repairUnboundScenes}
-            disabled={repairing || !repairChapterId || unboundCount === 0}
+            onClick={bindScenesToChapter}
+            disabled={batchProcessing || !batchChapterId || bindableCount === 0}
           >
-            {repairing ? "修复中..." : `修复未绑定 (${unboundCount})`}
+            {batchProcessing ? "处理中..." : `批量绑定 (${bindableCount})`}
+          </Button>
+          <Button
+            variant="outline"
+            onClick={unbindScenesFromChapter}
+            disabled={batchProcessing || unbindableCount === 0}
+          >
+            {batchProcessing ? "处理中..." : `批量解绑 (${unbindableCount})`}
           </Button>
         </div>
       </div>
@@ -372,6 +443,7 @@ export default function ScenesPage() {
               scene={row.scene}
               depth={row.depth}
               sceneTagTemplate={sceneTagTemplate}
+              chapters={chapters}
               onSave={saveScene}
               onDelete={deleteScene}
               onMoveUp={() => moveScene(row.scene.id, "up")}

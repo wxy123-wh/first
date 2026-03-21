@@ -4,6 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useSidecar } from "@/hooks/useSidecar";
+import { findMissingReferenceIds, resolveDisplayName } from "@/lib/display-name";
 import { useAppStore } from "@/lib/store";
 import type {
   AgentDefinition,
@@ -111,6 +112,7 @@ export default function ExecutionDetailPage() {
   const [isPaused, setIsPaused] = useState(false);
   const [skipPendingStepId, setSkipPendingStepId] = useState<string | null>(null);
   const [controlFeedback, setControlFeedback] = useState<string | null>(null);
+  const [showInternalIds, setShowInternalIds] = useState(false);
 
   const loadDetail = async () => {
     if (!execId) {
@@ -202,6 +204,14 @@ export default function ExecutionDetailPage() {
     () => Object.fromEntries(agents.map((agent) => [agent.id, agent.name])) as Record<string, string>,
     [agents],
   );
+  const hasMissingWorkflowReference = useMemo(
+    () => !!detail && !workflowNameMap[detail.execution.workflowId],
+    [detail, workflowNameMap],
+  );
+  const missingAgentIds = useMemo(
+    () => findMissingReferenceIds(steps.map((step) => step.agentId), agentNameMap),
+    [steps, agentNameMap],
+  );
 
   const completedCount = steps.filter((step) => step.status === "completed").length;
   const progress = steps.length === 0 ? 0 : (completedCount / steps.length) * 100;
@@ -272,9 +282,18 @@ export default function ExecutionDetailPage() {
           >
             ← 返回执行列表
           </Link>
-          <h2 className="text-lg font-semibold">执行详情：{detail.execution.id}</h2>
+          <h2 className="text-lg font-semibold">执行详情</h2>
+          {showInternalIds && (
+            <p className="text-xs text-muted-foreground">executionId: {detail.execution.id}</p>
+          )}
           <p className="text-xs text-muted-foreground">
-            工作流：{workflowNameMap[detail.execution.workflowId] ?? detail.execution.workflowId}
+            工作流：
+            {resolveDisplayName({
+              id: detail.execution.workflowId,
+              nameById: workflowNameMap,
+              emptyLabel: "未知工作流",
+              missingLabel: "已删除工作流",
+            })}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -297,6 +316,9 @@ export default function ExecutionDetailPage() {
           <Button variant="outline" onClick={() => void loadDetail()}>
             刷新
           </Button>
+          <Button variant={showInternalIds ? "secondary" : "outline"} onClick={() => setShowInternalIds((v) => !v)}>
+            {showInternalIds ? "隐藏诊断ID" : "诊断视图"}
+          </Button>
         </div>
       </div>
 
@@ -309,6 +331,23 @@ export default function ExecutionDetailPage() {
       {controlFeedback && !error && (
         <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
           {controlFeedback}
+        </div>
+      )}
+      {(hasMissingWorkflowReference || missingAgentIds.length > 0) && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900">
+          引用失效：
+          {hasMissingWorkflowReference && " 当前执行关联的工作流已删除。"}
+          {missingAgentIds.length > 0 &&
+            ` 以下步骤引用的智能体已删除：${missingAgentIds
+              .map((agentId) =>
+                resolveDisplayName({
+                  id: agentId,
+                  nameById: agentNameMap,
+                  emptyLabel: "未知智能体",
+                  missingLabel: "已删除智能体",
+                }),
+              )
+              .join("、")}。`}
         </div>
       )}
 
@@ -333,9 +372,17 @@ export default function ExecutionDetailPage() {
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="font-medium">
-                    Step {index + 1} · {agentNameMap[step.agentId] ?? step.agentId}
+                    Step {index + 1} ·{" "}
+                    {resolveDisplayName({
+                      id: step.agentId,
+                      nameById: agentNameMap,
+                      emptyLabel: "未知智能体",
+                      missingLabel: "已删除智能体",
+                    })}
                   </p>
-                  <p className="text-xs text-muted-foreground">stepId: {step.stepId}</p>
+                  {showInternalIds && (
+                    <p className="text-xs text-muted-foreground">stepId: {step.stepId}</p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge variant={statusVariant(step.status)}>

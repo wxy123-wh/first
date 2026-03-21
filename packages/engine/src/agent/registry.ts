@@ -1,5 +1,7 @@
 import type { AgentDefinition } from '../types.js';
 import type { StoreManager } from '../store/store-manager.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 export interface RegisterOptions {
   name: string;
@@ -156,7 +158,7 @@ function keyFromBuiltinPath(agentMdPath: string): string | null {
   return match?.[1] ?? null;
 }
 
-function buildBuiltinMd(preset: BuiltinPreset): string {
+function buildLegacyBuiltinMd(preset: BuiltinPreset): string {
   return [
     `# ${preset.name}`,
     '',
@@ -174,9 +176,54 @@ function buildBuiltinMd(preset: BuiltinPreset): string {
   ].join('\n');
 }
 
-function shouldBootstrapMd(name: string, md: string): boolean {
+function resolveBuiltinPresetMd(key: string): string | null {
+  const runtimeDirs: string[] = [];
+  if (typeof __dirname === 'string' && __dirname.length > 0) {
+    runtimeDirs.push(__dirname);
+  }
+  if (process.argv[1]) {
+    runtimeDirs.push(dirname(process.argv[1]));
+  }
+
+  const candidates = [
+    ...runtimeDirs.flatMap((runtimeDir) => [
+      resolve(runtimeDir, 'presets', key, 'agent.md'),
+      resolve(runtimeDir, '../src/agent/presets', key, 'agent.md'),
+      resolve(runtimeDir, '../../src/agent/presets', key, 'agent.md'),
+    ]),
+    resolve(process.cwd(), 'src/agent/presets', key, 'agent.md'),
+    resolve(process.cwd(), 'packages/engine/src/agent/presets', key, 'agent.md'),
+  ];
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    try {
+      return readFileSync(candidate, 'utf-8');
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+function buildBuiltinMd(preset: BuiltinPreset): string {
+  const key = keyFromBuiltinPath(preset.agentMdPath);
+  if (key) {
+    const presetMd = resolveBuiltinPresetMd(key);
+    if (presetMd?.trim()) {
+      return presetMd;
+    }
+  }
+  return buildLegacyBuiltinMd(preset);
+}
+
+function shouldBootstrapMd(name: string, md: string, preset: BuiltinPreset): boolean {
   const normalized = md.trim();
-  return normalized.length === 0 || normalized === `# ${name}`;
+  if (normalized.length === 0 || normalized === `# ${name}`) {
+    return true;
+  }
+  return normalized === buildLegacyBuiltinMd(preset).trim();
 }
 
 export class AgentRegistry {
@@ -266,7 +313,7 @@ export class AgentRegistry {
         currentMd = '';
       }
       const presetDefinition = presetByKey.get(key);
-      if (presetDefinition && shouldBootstrapMd(agent.name, currentMd)) {
+      if (presetDefinition && shouldBootstrapMd(agent.name, currentMd, presetDefinition)) {
         this.store.saveAgentMd(agent.agentMdPath, buildBuiltinMd(presetDefinition));
       }
     }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -253,11 +254,17 @@ export default function SettingsPage() {
         </CardHeader>
         <CardContent className="space-y-2">
           <p className="text-sm text-muted-foreground">
-            为避免误导，当前版本已禁用 RAG 同步执行入口。
+            点击后可进入同步页执行、重试并查看同步统计与失败详情。
           </p>
-          <Button variant="outline" disabled>
-            {ragSyncState.actionLabel}
-          </Button>
+          {currentProject?.id ? (
+            <Link to={`/projects/${currentProject.id}/settings/rag-sync`}>
+              <Button variant="outline">{ragSyncState.actionLabel}</Button>
+            </Link>
+          ) : (
+            <Button variant="outline" disabled>
+              先打开项目
+            </Button>
+          )}
         </CardContent>
       </Card>
     </div>

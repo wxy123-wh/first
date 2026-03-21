@@ -14,6 +14,7 @@ const ExecutionsPage = lazy(() => import("./pages/ExecutionsPage"));
 const AgentEditPage = lazy(() => import("./pages/AgentEditPage"));
 const ExecutionDetailPage = lazy(() => import("./pages/ExecutionDetailPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
+const SettingsLibraryPage = lazy(() => import("./pages/SettingsLibraryPage"));
 const RagSyncPage = lazy(() => import("./pages/RagSyncPage"));
 
 export default function App() {
@@ -34,6 +35,7 @@ export default function App() {
           <Route path="executions" element={<ExecutionsPage />} />
           <Route path="executions/:execId" element={<ExecutionDetailPage />} />
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="settings-library" element={<SettingsLibraryPage />} />
           <Route path="settings/rag-sync" element={<RagSyncPage />} />
         </Route>
         <Route path="*" element={<Navigate replace to="/" />} />

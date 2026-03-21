@@ -30,6 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useSidecar } from "@/hooks/useSidecar";
+import { findMissingReferenceIds, resolveDisplayName } from "@/lib/display-name";
 import { useAppStore } from "@/lib/store";
 import { inferWorkflowKind, splitWorkflowsByKind, type WorkflowKind } from "@/lib/workflow-kind";
 import type { AgentDefinition, WorkflowDefinition, WorkflowStep } from "@/types/engine";
@@ -183,6 +184,19 @@ export default function WorkflowsPage() {
     }
     return draft.kind ?? inferWorkflowKind(draft);
   }, [draft]);
+  const missingStepAgentIds = useMemo(() => {
+    if (!draft) {
+      return [];
+    }
+    return findMissingReferenceIds(
+      draft.steps.map((step) => step.agentId),
+      agentNameById,
+    );
+  }, [draft, agentNameById]);
+  const normalizedNewStepAgentId = useMemo(
+    () => (agents.some((agent) => agent.id === newStepAgentId) ? newStepAgentId : ""),
+    [agents, newStepAgentId],
+  );
 
   const updateStep = (stepId: string, updater: (step: WorkflowStep) => WorkflowStep) => {
     setDraft((current) => {
@@ -254,10 +268,13 @@ export default function WorkflowsPage() {
   };
 
   const addStep = () => {
-    if (!draft || !newStepAgentId) {
+    if (!draft || !normalizedNewStepAgentId) {
       return;
     }
-    const next = normalizeStepOrder([...draft.steps, newStep(newStepAgentId, draft.steps.length)]);
+    const next = normalizeStepOrder([
+      ...draft.steps,
+      newStep(normalizedNewStepAgentId, draft.steps.length),
+    ]);
     setDraft({
       ...draft,
       steps: next,
@@ -408,7 +425,7 @@ export default function WorkflowsPage() {
           <div className="rounded-lg border border-border/70 p-3">
             <div className="flex flex-wrap items-center gap-2">
               <Select
-                value={newStepAgentId}
+                value={normalizedNewStepAgentId}
                 onValueChange={(value) => setNewStepAgentId(value ?? "")}
               >
                 <SelectTrigger className="w-60">
@@ -422,10 +439,26 @@ export default function WorkflowsPage() {
                   ))}
                 </SelectContent>
               </Select>
-              <Button variant="outline" onClick={addStep} disabled={!newStepAgentId}>
+              <Button variant="outline" onClick={addStep} disabled={!normalizedNewStepAgentId}>
                 添加步骤
               </Button>
             </div>
+            {missingStepAgentIds.length > 0 && (
+              <div className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900">
+                引用失效：当前工作流有步骤引用了已删除智能体（
+                {missingStepAgentIds
+                  .map((agentId) =>
+                    resolveDisplayName({
+                      id: agentId,
+                      nameById: agentNameById,
+                      missingLabel: "已删除智能体",
+                      emptyLabel: "未知智能体",
+                    }),
+                  )
+                  .join("、")}
+                ）。请替换或删除对应步骤。
+              </div>
+            )}
           </div>
 
           {draft.steps.length === 0 ? (
@@ -443,8 +476,18 @@ export default function WorkflowsPage() {
                     <SortableStep
                       key={step.id}
                       step={step}
-                      agentName={agentNameById[step.agentId] ?? step.agentId}
-                      agentSummary={agentSummaries[step.agentId] ?? ""}
+                      agentName={resolveDisplayName({
+                        id: step.agentId,
+                        nameById: agentNameById,
+                        missingLabel: "已删除智能体",
+                        emptyLabel: "未设置智能体",
+                      })}
+                      agentSummary={
+                        agentSummaries[step.agentId] ??
+                        (agentNameById[step.agentId]
+                          ? ""
+                          : "该步骤引用的智能体已删除，请重新选择。")
+                      }
                       onChange={(nextStep) => updateStep(step.id, () => nextStep)}
                       onDelete={() => deleteStep(step.id)}
                     />

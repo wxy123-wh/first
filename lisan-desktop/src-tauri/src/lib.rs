@@ -4,11 +4,12 @@ mod state;
 
 use commands::{
     agent_delete, agent_get_md, agent_list, agent_save, agent_save_md, chapter_create,
-    chapter_get_content, chapter_list, chapter_save, chapter_save_content, create_project,
+    chapter_delete, chapter_get_content, chapter_list, chapter_save, chapter_save_content, create_project,
     delete_project, execution_detail, execution_list, list_projects, outline_get, outline_save,
     project_get, project_open, project_update, provider_delete, provider_list, provider_save,
-    scene_delete, scene_list, scene_reorder, scene_save, workflow_abort, workflow_list,
-    workflow_pause, workflow_rerun, workflow_resume, workflow_run, workflow_save, workflow_skip,
+    rag_status, rag_sync, scene_delete, scene_list, scene_reorder, scene_save, setting_delete,
+    setting_get, setting_list, setting_save, workflow_abort, workflow_list, workflow_pause,
+    workflow_rerun, workflow_resume, workflow_run, workflow_save, workflow_skip,
 };
 use state::AppState;
 use std::path::PathBuf;
@@ -60,10 +61,17 @@ pub fn run() {
             chapter_list,
             chapter_save,
             chapter_create,
+            chapter_delete,
             chapter_get_content,
             chapter_save_content,
+            setting_list,
+            setting_get,
+            setting_save,
+            setting_delete,
             execution_list,
             execution_detail,
+            rag_sync,
+            rag_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

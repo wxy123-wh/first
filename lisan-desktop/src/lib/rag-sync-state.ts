@@ -6,10 +6,10 @@ export interface RagSyncState {
 }
 
 const RAG_SYNC_STATE: RagSyncState = {
-  available: false,
-  title: "当前版本不可用",
-  reason: "RAG 同步链路暂未接入 sidecar/engine 可执行能力，请等待后续版本开放。",
-  actionLabel: "功能建设中",
+  available: true,
+  title: "已接入执行链路",
+  reason: "可同步设定集、大纲、场景树、正文到向量数据库，并返回成功/失败统计。",
+  actionLabel: "开始同步",
 };
 
 export function getRagSyncState(): RagSyncState {

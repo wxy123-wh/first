@@ -54,6 +54,14 @@ function setupTestEnv() {
     sceneTagTemplate: [{ key: 'mood', label: '情绪', options: ['紧张', '激烈', '平静'] }],
   });
 
+  store.saveSetting({
+    projectId: project.id,
+    title: '世界规则',
+    tags: ['世界观'],
+    summary: '能力体系分为三阶，需遵循代价守恒。',
+    content: '修炼体系分三阶，每阶有明确代价与上限。',
+  });
+
   return { store, project, chapter, prevChapter, scene1, scene2 };
 }
 
@@ -92,16 +100,22 @@ describe('ContextBuilder', () => {
     expect(ctx.previousChapterTail).toBe('');
   });
 
-  it('buildDecomposeContext returns sourceOutline, existingScenes, tagTemplate', () => {
+  it('buildDecomposeContext returns enriched fields for scene generation', () => {
     const env = setupTestEnv();
     store = env.store;
     const builder = new ContextBuilder(env.store);
 
-    const ctx = builder.buildDecomposeContext('大纲内容：故事从这里开始...', env.project.id);
+    const ctx = builder.buildDecomposeContext('大纲内容：故事从这里开始...', env.project.id, env.chapter.id);
 
     expect(ctx.sourceOutline).toBe('大纲内容：故事从这里开始...');
+    expect(ctx.chapter?.id).toBe(env.chapter.id);
     expect(ctx.existingScenes).toHaveLength(2);
+    expect(ctx.recentSceneSummaries.length).toBeGreaterThan(0);
+    expect(ctx.recentSceneSummaries.join('\n')).toContain('开场');
+    expect(ctx.settingSummaries.length).toBeGreaterThan(0);
+    expect(ctx.settingSummaries.join('\n')).toContain('世界规则');
     expect(ctx.tagTemplate).toHaveLength(1);
     expect(ctx.tagTemplate[0].key).toBe('mood');
+    expect(ctx.tagTemplateConstraints.join('\n')).toContain('情绪');
   });
 });

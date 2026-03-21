@@ -10,10 +10,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { resolveDisplayName } from "@/lib/display-name";
 import { Textarea } from "@/components/ui/textarea";
-import type { SceneCard, TagTemplateEntry } from "@/types/engine";
+import type { Chapter, SceneCard, TagTemplateEntry } from "@/types/engine";
 
 const NONE_VALUE = "__none__";
+const UNBOUND_CHAPTER_VALUE = "__unbound_chapter__";
+
+function chapterSelectValue(chapterId?: string): string {
+  if (typeof chapterId !== "string") {
+    return UNBOUND_CHAPTER_VALUE;
+  }
+  const normalized = chapterId.trim();
+  return normalized.length > 0 ? normalized : UNBOUND_CHAPTER_VALUE;
+}
 
 function splitByComma(value: string): string[] {
   return value
@@ -32,6 +42,7 @@ function splitByNewLine(value: string): string[] {
 interface SceneEditFormProps {
   scene: SceneCard;
   sceneTagTemplate: TagTemplateEntry[];
+  chapters: Chapter[];
   onSave: (scene: SceneCard) => Promise<void> | void;
   onDelete?: (sceneId: string) => Promise<void> | void;
   onCancel?: () => void;
@@ -41,13 +52,14 @@ interface SceneEditFormProps {
 export default function SceneEditForm({
   scene,
   sceneTagTemplate,
+  chapters,
   onSave,
   onDelete,
   onCancel,
   isSaving = false,
 }: SceneEditFormProps) {
   const [title, setTitle] = useState(scene.title);
-  const [chapterId, setChapterId] = useState(scene.chapterId ?? "");
+  const [chapterId, setChapterId] = useState(chapterSelectValue(scene.chapterId));
   const [charactersText, setCharactersText] = useState(scene.characters.join(", "));
   const [location, setLocation] = useState(scene.location);
   const [eventSkeletonText, setEventSkeletonText] = useState(scene.eventSkeleton.join("\n"));
@@ -58,7 +70,7 @@ export default function SceneEditForm({
 
   useEffect(() => {
     setTitle(scene.title);
-    setChapterId(scene.chapterId ?? "");
+    setChapterId(chapterSelectValue(scene.chapterId));
     setCharactersText(scene.characters.join(", "));
     setLocation(scene.location);
     setEventSkeletonText(scene.eventSkeleton.join("\n"));
@@ -77,6 +89,20 @@ export default function SceneEditForm({
     () => Object.entries(tags).filter(([key]) => !tagTemplateKeys.has(key)),
     [tags, tagTemplateKeys],
   );
+  const missingChapterId = useMemo(() => {
+    if (chapterId === UNBOUND_CHAPTER_VALUE) {
+      return null;
+    }
+    return chapters.some((chapter) => chapter.id === chapterId) ? null : chapterId;
+  }, [chapterId, chapters]);
+  const chapterNameById = useMemo(
+    () =>
+      Object.fromEntries(chapters.map((chapter) => [chapter.id, `第${chapter.number}章 ${chapter.title}`])) as Record<
+        string,
+        string
+      >,
+    [chapters],
+  );
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -88,7 +114,7 @@ export default function SceneEditForm({
     await onSave({
       ...scene,
       title: title.trim() || "未命名场景",
-      chapterId: chapterId.trim() ? chapterId.trim() : undefined,
+      chapterId: chapterId === UNBOUND_CHAPTER_VALUE ? undefined : chapterId,
       characters: splitByComma(charactersText),
       location: location.trim(),
       eventSkeleton: splitByNewLine(eventSkeletonText),
@@ -111,13 +137,30 @@ export default function SceneEditForm({
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor={`scene-chapter-${scene.id}`}>章节 ID（可选）</Label>
-          <Input
-            id={`scene-chapter-${scene.id}`}
-            value={chapterId}
-            onChange={(event) => setChapterId(event.target.value)}
-            placeholder="如：chapter-001"
-          />
+          <Label htmlFor={`scene-chapter-${scene.id}`}>章节（可选）</Label>
+          <Select value={chapterId} onValueChange={(value) => setChapterId(value ?? UNBOUND_CHAPTER_VALUE)}>
+            <SelectTrigger id={`scene-chapter-${scene.id}`}>
+              <SelectValue placeholder="选择章节" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={UNBOUND_CHAPTER_VALUE}>未绑定</SelectItem>
+              {chapters.map((chapter) => (
+                <SelectItem key={chapter.id} value={chapter.id}>
+                  {chapterNameById[chapter.id]}
+                </SelectItem>
+              ))}
+              {missingChapterId && (
+                <SelectItem value={missingChapterId}>
+                  {resolveDisplayName({
+                    id: missingChapterId,
+                    nameById: chapterNameById,
+                    emptyLabel: "未绑定",
+                    missingLabel: "已删除章节",
+                  })}
+                </SelectItem>
+              )}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 

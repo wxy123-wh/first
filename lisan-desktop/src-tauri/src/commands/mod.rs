@@ -47,6 +47,14 @@ fn normalize_workflow_run_error(err: String) -> String {
     err
 }
 
+fn normalize_rag_sync_error(err: String) -> String {
+    if is_method_not_found(&err) {
+        return "RAG 同步失败：当前 sidecar 不支持 rag.sync/rag.status。请重建 @lisan/engine sidecar 后重试。"
+            .to_string();
+    }
+    err
+}
+
 fn build_agent_register_params(agent: &Value) -> Value {
     json!({
         "name": agent.get("name").cloned().unwrap_or(Value::String("未命名智能体".to_string())),
@@ -539,6 +547,73 @@ pub async fn chapter_save_content(
 }
 
 #[tauri::command]
+pub async fn chapter_delete(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+    strategy: Option<String>,
+) -> Result<(), String> {
+    rpc_void(
+        &state,
+        &app,
+        &["chapter.delete"],
+        json!({
+            "id": id,
+            "strategy": strategy.unwrap_or_else(|| "detach".to_string()),
+        }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn setting_list(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Value, String> {
+    rpc_call(
+        &state,
+        &app,
+        &["setting.list"],
+        json!({ "projectId": project_id }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn setting_get(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<Value, String> {
+    rpc_call(&state, &app, &["setting.get"], json!({ "id": id })).await
+}
+
+#[tauri::command]
+pub async fn setting_save(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    setting: Value,
+) -> Result<Value, String> {
+    rpc_call(
+        &state,
+        &app,
+        &["setting.save"],
+        json!({ "setting": setting }),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn setting_delete(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), String> {
+    rpc_void(&state, &app, &["setting.delete"], json!({ "id": id })).await
+}
+
+#[tauri::command]
 pub async fn execution_list(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -568,6 +643,37 @@ pub async fn execution_detail(
     .await
 }
 
+#[tauri::command]
+pub async fn rag_sync(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+    rpc_call(&state, &app, &["rag.sync"], json!({}))
+        .await
+        .map_err(normalize_rag_sync_error)
+}
+
+#[tauri::command]
+pub async fn rag_status(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
+    match rpc_call(&state, &app, &["rag.status"], json!({})).await {
+        Ok(result) => Ok(result),
+        Err(err) if is_method_not_found(&err) => Ok(json!({
+            "stage": "idle",
+            "running": false,
+            "runId": Value::Null,
+            "startedAt": Value::Null,
+            "completedAt": Value::Null,
+            "message": "当前 sidecar 版本不支持 RAG 同步。",
+            "currentFile": Value::Null,
+            "stats": {
+                "total": 0,
+                "processed": 0,
+                "succeeded": 0,
+                "failed": 0
+            },
+            "failures": []
+        })),
+        Err(err) => Err(err),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,5 +691,13 @@ mod tests {
         let error = "RPC error -32000: provider api key missing".to_string();
         let normalized = normalize_workflow_run_error(error.clone());
         assert_eq!(normalized, error);
+    }
+
+    #[test]
+    fn normalize_rag_sync_error_maps_method_not_found() {
+        let error = "RPC error -32601: Method not found: rag.sync".to_string();
+        let normalized = normalize_rag_sync_error(error);
+        assert!(normalized.contains("rag.sync"));
+        assert!(normalized.contains("请重建 @lisan/engine sidecar"));
     }
 }

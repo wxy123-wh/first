@@ -7,7 +7,11 @@ import type {
   ExecutionDetail,
   ProviderDefinition,
   Project,
+  RagSyncStartResult,
+  RagSyncStatus,
   SceneCard,
+  SettingDocument,
+  SettingDocumentSummary,
   SidecarProjectOpenResult,
   WorkflowDefinition,
   WorkflowRerunOptions,
@@ -26,6 +30,9 @@ type ProviderInput = Omit<ProviderDefinition, "createdAt" | "updatedAt"> &
   Partial<Pick<ProviderDefinition, "createdAt" | "updatedAt">>;
 type ChapterInput = Omit<Chapter, "id" | "createdAt" | "updatedAt"> &
   Partial<Pick<Chapter, "id" | "createdAt" | "updatedAt">>;
+type ChapterDeleteStrategy = "detach";
+type SettingInput = Pick<SettingDocument, "projectId" | "title" | "tags" | "summary" | "content"> &
+  Partial<Pick<SettingDocument, "id">>;
 type ProjectUpdatePatch = Partial<Pick<Project, "name" | "sceneTagTemplate">>;
 
 async function invokeCommand<T>(command: string, payload?: Record<string, unknown>): Promise<T> {
@@ -61,10 +68,17 @@ export interface SidecarApi {
   chapterList: (projectId: string) => Promise<Chapter[]>;
   chapterSave: (chapter: ChapterInput) => Promise<Chapter>;
   chapterCreate: (chapter: ChapterInput) => Promise<Chapter>;
+  chapterDelete: (id: string, strategy?: ChapterDeleteStrategy) => Promise<void>;
   chapterGetContent: (id: string) => Promise<string>;
   chapterSaveContent: (id: string, content: string) => Promise<void>;
+  settingList: (projectId: string) => Promise<SettingDocumentSummary[]>;
+  settingGet: (id: string) => Promise<SettingDocument>;
+  settingSave: (setting: SettingInput) => Promise<SettingDocument>;
+  settingDelete: (id: string) => Promise<void>;
   executionList: (projectId: string) => Promise<Execution[]>;
   executionDetail: (id: string) => Promise<ExecutionDetail>;
+  ragSync: () => Promise<RagSyncStartResult>;
+  ragStatus: () => Promise<RagSyncStatus>;
 }
 
 export function useSidecar(): SidecarApi {
@@ -171,6 +185,9 @@ export function useSidecar(): SidecarApi {
   const chapterCreate = useCallback((chapter: ChapterInput) => {
     return invokeCommand<Chapter>("chapter_create", { chapter });
   }, []);
+  const chapterDelete = useCallback((id: string, strategy: ChapterDeleteStrategy = "detach") => {
+    return invokeCommand<void>("chapter_delete", { id, strategy });
+  }, []);
   const chapterGetContent = useCallback(async (id: string) => {
     const result = await invokeCommand<string | { content?: string }>("chapter_get_content", { id });
     if (typeof result === "string") {
@@ -182,11 +199,32 @@ export function useSidecar(): SidecarApi {
     return invokeCommand<void>("chapter_save_content", { id, content });
   }, []);
 
+  const settingList = useCallback((projectId: string) => {
+    return invokeCommand<SettingDocumentSummary[]>("setting_list", { projectId });
+  }, []);
+  const settingGet = useCallback((id: string) => {
+    return invokeCommand<SettingDocument>("setting_get", { id });
+  }, []);
+  const settingSave = useCallback((setting: SettingInput) => {
+    return invokeCommand<SettingDocument>("setting_save", { setting });
+  }, []);
+  const settingDelete = useCallback((id: string) => {
+    return invokeCommand<void>("setting_delete", { id });
+  }, []);
+
   const executionList = useCallback((projectId: string) => {
     return invokeCommand<Execution[]>("execution_list", { projectId });
   }, []);
   const executionDetail = useCallback((id: string) => {
     return invokeCommand<ExecutionDetail>("execution_detail", { id });
+  }, []);
+
+  const ragSync = useCallback(() => {
+    return invokeCommand<RagSyncStartResult>("rag_sync");
+  }, []);
+
+  const ragStatus = useCallback(() => {
+    return invokeCommand<RagSyncStatus>("rag_status");
   }, []);
 
   return useMemo(
@@ -219,10 +257,17 @@ export function useSidecar(): SidecarApi {
       chapterList,
       chapterSave,
       chapterCreate,
+      chapterDelete,
       chapterGetContent,
       chapterSaveContent,
+      settingList,
+      settingGet,
+      settingSave,
+      settingDelete,
       executionList,
       executionDetail,
+      ragSync,
+      ragStatus,
     }),
     [
       projectOpen,
@@ -253,10 +298,17 @@ export function useSidecar(): SidecarApi {
       chapterList,
       chapterSave,
       chapterCreate,
+      chapterDelete,
       chapterGetContent,
       chapterSaveContent,
+      settingList,
+      settingGet,
+      settingSave,
+      settingDelete,
       executionList,
       executionDetail,
+      ragSync,
+      ragStatus,
     ],
   );
 }

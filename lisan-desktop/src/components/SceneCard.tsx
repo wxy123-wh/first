@@ -3,12 +3,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import SceneEditForm from "@/components/SceneEditForm";
-import type { SceneCard as SceneCardType, TagTemplateEntry } from "@/types/engine";
+import type { Chapter, SceneCard as SceneCardType, TagTemplateEntry } from "@/types/engine";
 
 interface SceneCardProps {
   scene: SceneCardType;
   depth: number;
   sceneTagTemplate: TagTemplateEntry[];
+  chapters: Chapter[];
   onSave: (scene: SceneCardType) => Promise<void> | void;
   onDelete: (sceneId: string) => Promise<void> | void;
   onMoveUp: (sceneId: string) => Promise<void> | void;
@@ -21,6 +22,7 @@ export default function SceneCard({
   scene,
   depth,
   sceneTagTemplate,
+  chapters,
   onSave,
   onDelete,
   onMoveUp,
@@ -101,6 +103,7 @@ export default function SceneCard({
             <SceneEditForm
               scene={scene}
               sceneTagTemplate={sceneTagTemplate}
+              chapters={chapters}
               isSaving={isSaving}
               onSave={async (nextScene) => {
                 setIsSaving(true);

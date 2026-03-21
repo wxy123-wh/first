@@ -42,6 +42,7 @@ export default function ChaptersPage() {
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [switchingWorkflow, setSwitchingWorkflow] = useState(false);
   const [running, setRunning] = useState(false);
   const [activeExecutionId, setActiveExecutionId] = useState<string | null>(null);
@@ -332,6 +333,39 @@ export default function ChaptersPage() {
     }
   };
 
+  const deleteChapter = async () => {
+    if (!selectedChapterId || !selectedChapter) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `确认删除第${selectedChapter.number}章《${selectedChapter.title}》？\n关联场景和执行记录会解绑章节，章节编号不会自动重排。`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const index = chapters.findIndex((chapter) => chapter.id === selectedChapterId);
+    const preferredChapterId =
+      index >= 0 ? chapters[index + 1]?.id ?? chapters[index - 1]?.id ?? null : null;
+
+    setDeleting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await sidecar.chapterDelete(selectedChapterId, "detach");
+      await loadBaseData(preferredChapterId);
+      if (!preferredChapterId) {
+        setContent("");
+      }
+      setNotice("章节已删除，关联场景与执行记录已解绑。");
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   if (!currentProject?.id) {
     return <p className="text-sm text-muted-foreground">请先打开项目。</p>;
   }
@@ -424,8 +458,17 @@ export default function ChaptersPage() {
               {saving ? "保存中..." : "保存"}
             </Button>
             <Button
+              variant="destructive"
+              onClick={() => void deleteChapter()}
+              disabled={!selectedChapterId || deleting || running || switchingWorkflow}
+            >
+              {deleting ? "删除中..." : "删除章节"}
+            </Button>
+            <Button
               onClick={runWorkflow}
-              disabled={!selectedChapterId || !selectedWorkflowId || running || switchingWorkflow}
+              disabled={
+                !selectedChapterId || !selectedWorkflowId || running || switchingWorkflow || deleting
+              }
             >
               {running ? "运行中..." : "运行"}
             </Button>
