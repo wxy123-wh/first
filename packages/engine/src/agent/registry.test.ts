@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { AgentRegistry } from './registry.js';
 import { StoreManager } from '../store/store-manager.js';
-import { rmSync, mkdirSync } from 'node:fs';
+import { rmSync, mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -172,5 +172,17 @@ describe('AgentRegistry', () => {
       expect(md).not.toBe(`# ${builtin.name}`);
       expect(md.length).toBeGreaterThan(builtin.name.length + 4);
     }
+  });
+
+  it('seedBuiltins() loads decompose builtin markdown from preset file', () => {
+    registry.seedBuiltins();
+    const decompose = registry
+      .list()
+      .find((agent) => agent.category === 'builtin' && agent.name === '拆解 Agent');
+    expect(decompose).toBeDefined();
+
+    const seededMd = registry.getAgentMd(decompose!.id).trim();
+    const presetMd = readFileSync(new URL('./presets/decompose-agent/agent.md', import.meta.url), 'utf-8').trim();
+    expect(seededMd).toBe(presetMd);
   });
 });

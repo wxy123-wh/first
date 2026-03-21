@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { StoreManager } from './store-manager.js';
 import { Database } from './database.js';
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -331,6 +331,50 @@ describe('StoreManager — Chapters', () => {
     const content = store.getChapterContent(chapter.id);
     expect(content).toContain('Content here.');
   });
+
+  it('deletes chapter and detaches related scenes and executions', () => {
+    const project = store.createProject('Test', testDir);
+    const chapter1 = store.saveChapter({
+      id: '', projectId: project.id, number: 1, title: 'Chapter 1',
+      status: 'pending', contentPath: 'chapters/001.md',
+      createdAt: '', updatedAt: '',
+    });
+    const chapter2 = store.saveChapter({
+      id: '', projectId: project.id, number: 2, title: 'Chapter 2',
+      status: 'pending', contentPath: 'chapters/002.md',
+      createdAt: '', updatedAt: '',
+    });
+
+    store.saveScene({
+      id: '', projectId: project.id, chapterId: chapter1.id, order: 0, title: 'Scene A',
+      characters: ['MC'], location: 'Arena', eventSkeleton: ['Fight'],
+      tags: { type: '核心' }, sourceOutline: 'outline text',
+      createdAt: '', updatedAt: '',
+    });
+    store.saveExecution({
+      id: '',
+      projectId: project.id,
+      chapterId: chapter1.id,
+      workflowId: 'workflow-1',
+      status: 'completed',
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    store.deleteChapter(chapter1.id, 'detach');
+
+    const chapters = store.getChapters(project.id);
+    expect(chapters).toHaveLength(1);
+    expect(chapters[0].id).toBe(chapter2.id);
+
+    const scenes = store.getScenes(project.id);
+    expect(scenes).toHaveLength(1);
+    expect(scenes[0].chapterId).toBeUndefined();
+
+    const executions = store.getExecutions(project.id);
+    expect(executions).toHaveLength(1);
+    expect((executions[0].chapterId ?? undefined)).toBeUndefined();
+  });
 });
 
 describe('StoreManager — Outline', () => {
@@ -352,5 +396,89 @@ describe('StoreManager — Outline', () => {
     const canonicalPath = join(testDir, '大纲', 'arc-1.md');
     expect(readFileSync(canonicalPath, 'utf-8')).toBe('# legacy outline');
     expect(store.getOutlineContent()).toBe('# legacy outline');
+  });
+});
+
+describe('StoreManager — Settings Library', () => {
+  it('saves, lists, gets, and deletes settings with filesystem persistence', () => {
+    const project = store.createProject('Test', testDir);
+    const saved = store.saveSetting({
+      projectId: project.id,
+      title: '世界观总览',
+      tags: ['世界观', '势力'],
+      summary: '三大势力与地理格局。',
+      content: '# 世界观总览\n\n三大势力割据，边境常年冲突。',
+    });
+
+    const absoluteFilePath = join(testDir, saved.filePath);
+    expect(existsSync(absoluteFilePath)).toBe(true);
+
+    const fileContent = readFileSync(absoluteFilePath, 'utf-8');
+    expect(fileContent).toContain('title: 世界观总览');
+    expect(fileContent).toContain('# 世界观总览');
+
+    const listed = store.listSettings(project.id);
+    expect(listed).toHaveLength(1);
+    expect(listed[0].id).toBe(saved.id);
+    expect(listed[0].title).toBe('世界观总览');
+    expect(listed[0].tags).toEqual(['世界观', '势力']);
+
+    const loaded = store.getSetting(saved.id);
+    expect(loaded.content).toContain('边境常年冲突');
+    expect(loaded.summary).toBe('三大势力与地理格局。');
+
+    store.deleteSetting(saved.id);
+    expect(store.listSettings(project.id)).toHaveLength(0);
+    expect(existsSync(absoluteFilePath)).toBe(false);
+  });
+
+  it('syncs external file changes in 设定集 directory back to sqlite index', () => {
+    const project = store.createProject('Test', testDir);
+    const settingsDir = join(testDir, '设定集');
+    mkdirSync(settingsDir, { recursive: true });
+    const externalPath = join(settingsDir, '宗门体系.md');
+
+    writeFileSync(
+      externalPath,
+      [
+        '---',
+        'title: 宗门体系',
+        'tags: 世界观, 势力',
+        '---',
+        '',
+        '# 宗门体系',
+        '',
+        '初版内容。',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const listed = store.listSettings(project.id);
+    const external = listed.find((item) => item.title === '宗门体系');
+    expect(external).toBeDefined();
+    expect(external?.tags).toEqual(['世界观', '势力']);
+
+    writeFileSync(
+      externalPath,
+      [
+        '---',
+        `id: ${external!.id}`,
+        'title: 宗门体系（修订）',
+        'tags: 世界观',
+        '---',
+        '',
+        '修订版内容。',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const synced = store.listSettings(project.id);
+    const updated = synced.find((item) => item.id === external!.id);
+    expect(updated?.title).toBe('宗门体系（修订）');
+    expect(updated?.tags).toEqual(['世界观']);
+
+    unlinkSync(externalPath);
+    const afterDelete = store.listSettings(project.id);
+    expect(afterDelete.find((item) => item.id === external!.id)).toBeUndefined();
   });
 });

@@ -7,6 +7,7 @@ import { basename } from 'node:path';
 import { Engine } from '../engine.js';
 import { RpcServer } from './rpc-server.js';
 import { ensureDefaultWorkflows } from '../workflow/defaults.js';
+import { RagSyncService } from '../rag/sync-service.js';
 
 function getProjectPath(): string {
   const idx = process.argv.indexOf('--project-path');
@@ -27,6 +28,12 @@ async function main() {
   engine.agents.seedBuiltins();
 
   const rpc = new RpcServer();
+  const ragSyncService = new RagSyncService({
+    projectRoot: projectPath,
+    emit: (event) => {
+      send(rpc.notify(event.method, event.params as unknown as Record<string, unknown>));
+    },
+  });
 
   // Forward WorkflowRuntime events as JSON-RPC notifications
   engine.runtime.on((event) => {
@@ -112,8 +119,21 @@ async function main() {
   rpc.register('chapter.list', async ({ projectId }) => engine.store.getChapters(projectId));
   rpc.register('chapter.get', async ({ id }) => engine.store.getChapter(id));
   rpc.register('chapter.save', async ({ chapter }) => engine.store.saveChapter(chapter));
+  rpc.register('chapter.delete', async ({ id, strategy }) => {
+    engine.store.deleteChapter(id, strategy);
+    return null;
+  });
   rpc.register('chapter.getContent', async ({ id }) => engine.store.getChapterContent(id));
   rpc.register('chapter.saveContent', async ({ id, content }) => { engine.store.saveChapterContent(id, content); return null; });
+
+  // === setting ===
+  rpc.register('setting.list', async ({ projectId }) => engine.store.listSettings(projectId));
+  rpc.register('setting.get', async ({ id }) => engine.store.getSetting(id));
+  rpc.register('setting.save', async ({ setting }) => engine.store.saveSetting(setting));
+  rpc.register('setting.delete', async ({ id }) => {
+    engine.store.deleteSetting(id);
+    return null;
+  });
 
   // === execution ===
   rpc.register('execution.list', async ({ projectId }) => engine.store.getExecutions(projectId));
@@ -124,6 +144,10 @@ async function main() {
   rpc.register('entity.list', async ({ projectId, type }) => engine.store.queryEntities(projectId, type));
   rpc.register('entity.query', async ({ projectId, type }) => engine.store.queryEntities(projectId, type));
   rpc.register('entity.save', async ({ entity }) => engine.store.saveEntity(entity));
+
+  // === rag ===
+  rpc.register('rag.status', async () => ragSyncService.getStatus());
+  rpc.register('rag.sync', async () => ragSyncService.startSync());
 
   // === workflow control ===
   rpc.register('workflow.run', async ({ workflowId, globalContext, chapterId }) => {

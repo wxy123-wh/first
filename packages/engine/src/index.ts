@@ -30,3 +30,16 @@ export { checkDraft } from './checker/post-write-checker.js';
 export type { CheckResult, CheckViolation } from './checker/post-write-checker.js';
 export { Engine } from './engine.js';
 export type { EngineOptions } from './engine.js';
+export {
+  RagSyncService,
+  scanMarkdownFiles,
+  inferDocumentType,
+} from './rag/sync-service.js';
+export type {
+  RagSyncStatus,
+  RagSyncStats,
+  RagSyncFailure,
+  RagSyncStartResult,
+  RagSyncEvent,
+  RagSyncStage,
+} from './rag/sync-service.js';

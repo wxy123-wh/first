@@ -582,6 +582,159 @@ describe('WorkflowRuntime', () => {
     expect(scenes[0].sourceOutline).toBe(sourceOutline);
   });
 
+  it('uses stage-specific scene instruction templates with enriched decompose context', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    env.store.updateProject(env.project.id, {
+      sceneTagTemplate: [
+        { key: 'sceneType', label: '场景类型', options: ['战斗', '转场', '揭示'] },
+      ],
+    });
+    env.store.saveSetting({
+      projectId: env.project.id,
+      title: '组织法则',
+      tags: ['势力'],
+      summary: '每个势力都遵循明确的奖惩机制。',
+      content: '组织规则：越级挑战必须付出代价。',
+    });
+    const chapter = env.store.saveChapter({
+      projectId: env.project.id,
+      number: 1,
+      title: '第一章',
+      status: 'drafting',
+      contentPath: 'chapters/001.md',
+    });
+    env.store.saveScene({
+      projectId: env.project.id,
+      chapterId: chapter.id,
+      parentId: undefined,
+      order: 0,
+      title: '雨夜埋伏',
+      characters: ['甲', '乙'],
+      location: '旧港',
+      eventSkeleton: ['潜伏', '短兵相接'],
+      tags: { sceneType: '战斗' },
+      sourceOutline: '旧港夜袭',
+    });
+
+    const builtins = env.registry.list();
+    const decomposeAgent = builtins.find((agent) => /拆解|decompose/i.test(agent.name));
+    const transitionAgent = builtins.find((agent) => /过渡|transition/i.test(agent.name));
+    const validationAgent = builtins.find((agent) => /检验|validation/i.test(agent.name));
+    expect(decomposeAgent).toBeDefined();
+    expect(transitionAgent).toBeDefined();
+    expect(validationAgent).toBeDefined();
+
+    const workflow = env.store.saveWorkflow({
+      id: '',
+      projectId: env.project.id,
+      name: '场景生成链路',
+      description: 'decompose -> transition -> validation',
+      kind: 'scene',
+      steps: [
+        { id: '', order: 0, agentId: decomposeAgent!.id, enabled: true },
+        { id: '', order: 1, agentId: transitionAgent!.id, enabled: true },
+        { id: '', order: 2, agentId: validationAgent!.id, enabled: true },
+      ],
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    const prompts: string[] = [];
+    const provider: LLMProvider = {
+      name: 'capture-scene-stage-prompts',
+      async call(options) {
+        const userPrompt = options.messages.find((message) => message.role === 'user')?.content ?? '';
+        prompts.push(userPrompt);
+        if (prompts.length === 1) {
+          return {
+            text: JSON.stringify({
+              scenes: [
+                {
+                  title: '旧港围捕',
+                  characters: ['甲', '乙'],
+                  location: '旧港仓库',
+                  eventSkeleton: ['设伏', '爆发冲突', '主角脱困'],
+                  tags: { sceneType: '战斗' },
+                },
+              ],
+            }),
+            usage: { inputTokens: 10, outputTokens: 20 },
+          };
+        }
+        if (prompts.length === 2) {
+          return {
+            text: JSON.stringify({ note: 'transition-pass' }),
+            usage: { inputTokens: 10, outputTokens: 20 },
+          };
+        }
+        return {
+          text: 'validation-pass',
+          usage: { inputTokens: 10, outputTokens: 20 },
+        };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(provider),
+      new ContextBuilder(env.store),
+    );
+
+    await runtime.run(
+      workflow.id,
+      { sourceOutline: '主角在旧港遭遇围捕并尝试反制。' },
+      chapter.id,
+    );
+
+    expect(prompts).toHaveLength(3);
+    expect(prompts[0]).toContain('任务：拆解场景');
+    expect(prompts[1]).toContain('任务：补全场景转场');
+    expect(prompts[2]).toContain('任务：检验场景一致性');
+
+    expect(prompts[0]).toContain('当前章节信息');
+    expect(prompts[0]).toContain('最近场景摘要');
+    expect(prompts[0]).toContain('设定集摘要');
+    expect(prompts[0]).toContain('标签模板约束');
+    expect(prompts[0]).toContain('禁止输出解释文字');
+  });
+
+  it('returns explicit missing-context error for scene workflows without outline or instructions', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const decomposeAgent = env.registry
+      .list()
+      .find((agent) => /拆解|decompose/i.test(agent.name));
+    expect(decomposeAgent).toBeDefined();
+
+    const workflow = env.store.saveWorkflow({
+      id: '',
+      projectId: env.project.id,
+      name: '场景工作流-缺少上下文',
+      description: '用于测试缺少关键上下文报错',
+      kind: 'scene',
+      steps: [{ id: '', order: 0, agentId: decomposeAgent!.id, enabled: true }],
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      env.executor,
+      new ContextBuilder(env.store),
+    );
+
+    await expect(runtime.run(workflow.id, {})).rejects.toThrow('缺少关键上下文');
+    expect(env.store.getExecutions(env.project.id)).toHaveLength(0);
+  });
+
   it('binds scenes without chapterId to run chapter and reports fallback summary', async () => {
     const env = setupTestEnv();
     store = env.store;
@@ -639,6 +792,8 @@ describe('WorkflowRuntime', () => {
     const complete = events.find((event) => event.type === 'workflow:complete');
     expect(complete?.type).toBe('workflow:complete');
     if (complete?.type === 'workflow:complete') {
+      expect(complete.summary).toContain('本次绑定章节 1 条');
+      expect(complete.summary).toContain('未绑定章节 0 条');
       expect(complete.summary).toContain('缺失 chapterId');
       expect(complete.summary).toContain('兜底绑定');
     }
@@ -863,23 +1018,27 @@ describe('WorkflowRuntime', () => {
     expect(detail.steps[0].output).toContain('{{missing.value}}');
   });
 
-  it('strictly parses scene workflow output as object.scenes only', async () => {
+  it('parses scene workflow output from json fenced array root', async () => {
     const env = setupTestEnv();
     store = env.store;
 
     const provider: LLMProvider = {
-      name: 'strict-scenes',
+      name: 'fenced-array-scenes',
       async call() {
         return {
-          text: JSON.stringify([
-            {
-              title: '数组根节点场景',
-              characters: ['A'],
-              location: 'X',
-              eventSkeleton: ['one'],
-              tags: {},
-            },
-          ]),
+          text: [
+            '```json',
+            JSON.stringify([
+              {
+                title: '数组根节点场景',
+                characters: ['A'],
+                location: 'X',
+                eventSkeleton: ['one'],
+                tags: {},
+              },
+            ]),
+            '```',
+          ].join('\n'),
           usage: { inputTokens: 8, outputTokens: 10 },
         };
       },
@@ -901,12 +1060,161 @@ describe('WorkflowRuntime', () => {
     await runtime.run(env.workflow.id, { sourceOutline: '用于测试严格 scenes 解析。' });
 
     const scenes = env.store.getScenes(env.project.id);
-    expect(scenes.length).toBe(0);
+    expect(scenes.length).toBe(1);
+    expect(scenes[0].title).toBe('数组根节点场景');
 
     const complete = events.find((event) => event.type === 'workflow:complete');
     expect(complete?.type).toBe('workflow:complete');
     if (complete?.type === 'workflow:complete') {
-      expect(complete.summary).toContain('已保存 0 条场景');
+      expect(complete.summary).toContain('Workflow completed');
+      expect(complete.summary).toContain('已保存 1 条场景');
+      expect(complete.summary).toContain('未绑定章节 1 条');
+    }
+  });
+
+  it('retries scene json parse once for mixed text output and recovers scenes', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const provider: LLMProvider = {
+      name: 'repair-once-scenes',
+      async call() {
+        return {
+          text: [
+            '下面是场景拆解结果（含解释文本）：',
+            '[',
+            '{"title":"修复后场景","characters":["甲"],"location":"港口","eventSkeleton":["伏击"],"tags":{"mood":"紧张"}}',
+            ']',
+            '请查收。',
+          ].join('\n'),
+          usage: { inputTokens: 8, outputTokens: 10 },
+        };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(provider),
+      new ContextBuilder(env.store),
+    );
+
+    const events: WorkflowEvent[] = [];
+    runtime.on((event) => events.push(event));
+
+    await runtime.run(env.workflow.id, { sourceOutline: '用于测试一次修复重试。' });
+
+    const scenes = env.store.getScenes(env.project.id);
+    expect(scenes.length).toBe(1);
+    expect(scenes[0].title).toBe('修复后场景');
+
+    const complete = events.find((event) => event.type === 'workflow:complete');
+    expect(complete?.type).toBe('workflow:complete');
+    if (complete?.type === 'workflow:complete') {
+      expect(complete.summary).toContain('解析修复');
+    }
+  });
+
+  it('marks execution as failed with explicit reason when scene outputs cannot be parsed', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const provider: LLMProvider = {
+      name: 'invalid-json-scenes',
+      async call() {
+        return {
+          text: '这是自然语言总结，不是 JSON。',
+          usage: { inputTokens: 8, outputTokens: 10 },
+        };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(provider),
+      new ContextBuilder(env.store),
+    );
+
+    const events: WorkflowEvent[] = [];
+    runtime.on((event) => events.push(event));
+
+    await runtime.run(env.workflow.id, { sourceOutline: '用于测试解析失败。' });
+
+    const scenes = env.store.getScenes(env.project.id);
+    expect(scenes.length).toBe(0);
+
+    const executions = env.store.getExecutions(env.project.id);
+    expect(executions).toHaveLength(1);
+    expect(executions[0].status).toBe('failed');
+
+    const complete = events.find((event) => event.type === 'workflow:complete');
+    expect(complete?.type).toBe('workflow:complete');
+    if (complete?.type === 'workflow:complete') {
+      expect(complete.summary).toContain('Workflow failed');
+      expect(complete.summary).toContain('场景写入失败');
+      expect(complete.summary).toContain('JSON 解析失败');
+    }
+  });
+
+  it('marks execution as failed when scene cards violate minimal schema constraints', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const provider: LLMProvider = {
+      name: 'invalid-scene-schema',
+      async call() {
+        return {
+          text: JSON.stringify({
+            scenes: [
+              {
+                title: 123,
+                eventSkeleton: '单字符串',
+                tags: [],
+              },
+            ],
+          }),
+          usage: { inputTokens: 8, outputTokens: 10 },
+        };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(provider),
+      new ContextBuilder(env.store),
+    );
+
+    const events: WorkflowEvent[] = [];
+    runtime.on((event) => events.push(event));
+
+    await runtime.run(env.workflow.id, { sourceOutline: '用于测试字段校验失败。' });
+
+    const scenes = env.store.getScenes(env.project.id);
+    expect(scenes.length).toBe(0);
+
+    const executions = env.store.getExecutions(env.project.id);
+    expect(executions).toHaveLength(1);
+    expect(executions[0].status).toBe('failed');
+
+    const complete = events.find((event) => event.type === 'workflow:complete');
+    expect(complete?.type).toBe('workflow:complete');
+    if (complete?.type === 'workflow:complete') {
+      expect(complete.summary).toContain('Workflow failed');
+      expect(complete.summary).toContain('字段校验失败');
+      expect(complete.summary).toContain('title');
+      expect(complete.summary).toContain('eventSkeleton');
+      expect(complete.summary).toContain('tags');
     }
   });
 
@@ -991,6 +1299,8 @@ describe('WorkflowRuntime', () => {
     expect(complete?.type).toBe('workflow:complete');
     if (complete?.type === 'workflow:complete') {
       expect(complete.summary).toContain('已保存 2 条场景');
+      expect(complete.summary).toContain('本次绑定章节 0 条');
+      expect(complete.summary).toContain('未绑定章节 2 条');
     }
   });
 

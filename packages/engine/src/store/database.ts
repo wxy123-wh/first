@@ -131,6 +131,18 @@ export class Database {
         createdAt TEXT NOT NULL,
         updatedAt TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS settings (
+        id TEXT PRIMARY KEY,
+        projectId TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        tags TEXT DEFAULT '[]',
+        summary TEXT DEFAULT '',
+        filePath TEXT NOT NULL,
+        createdAt TEXT NOT NULL,
+        updatedAt TEXT NOT NULL,
+        UNIQUE(projectId, filePath)
+      );
     `);
 
     const providerColumns = this.raw

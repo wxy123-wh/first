@@ -13,6 +13,22 @@ export interface TagTemplateEntry {
   options?: string[];
 }
 
+export interface SceneGenerationChapterContext {
+  id: string;
+  number: number;
+  title: string;
+}
+
+export interface DecomposeContext {
+  sourceOutline: string;
+  chapter?: SceneGenerationChapterContext;
+  existingScenes: SceneCard[];
+  recentSceneSummaries: string[];
+  settingSummaries: string[];
+  tagTemplate: TagTemplateEntry[];
+  tagTemplateConstraints: string[];
+}
+
 export type ProviderType = 'anthropic' | 'openai' | 'newapi';
 
 export interface ProviderDefinition {
@@ -91,6 +107,7 @@ export interface SceneCard {
 
 // === Chapter ===
 export type ChapterStatus = 'pending' | 'drafting' | 'rewriting' | 'reviewing' | 'done';
+export type ChapterDeleteStrategy = 'detach';
 
 export interface Chapter {
   id: string;
@@ -140,4 +157,20 @@ export interface Entity {
   data: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+}
+
+// === Settings Library ===
+export interface SettingDocumentSummary {
+  id: string;
+  projectId: string;
+  title: string;
+  tags: string[];
+  summary: string;
+  filePath: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SettingDocument extends SettingDocumentSummary {
+  content: string;
 }

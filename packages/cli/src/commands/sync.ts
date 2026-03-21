@@ -3,40 +3,15 @@
 import { Command } from 'commander';
 import ora from 'ora';
 import { confirm } from '@inquirer/prompts';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join, extname, relative } from 'node:path';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { join, relative } from 'node:path';
 import { loadConfig } from '../config.js';
 import { createVectorStore } from './shared.js';
-import type { Document, DocumentType } from '@lisan/rag';
-
-/** 递归扫描目录下的 .md 文件 */
-async function scanMarkdownFiles(dir: string): Promise<string[]> {
-  const files: string[] = [];
-  try {
-    const entries = await readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = join(dir, entry.name);
-      if (entry.isDirectory() && !entry.name.startsWith('.')) {
-        files.push(...(await scanMarkdownFiles(fullPath)));
-      } else if (entry.isFile() && extname(entry.name) === '.md') {
-        files.push(fullPath);
-      }
-    }
-  } catch {
-    // 目录不存在时忽略
-  }
-  return files;
-}
-
-/** 根据文件路径推断文档类型 */
-function inferDocType(filePath: string, projectRoot: string): DocumentType {
-  const rel = relative(projectRoot, filePath).replace(/\\\\/g, '/');
-  if (rel.startsWith('设定集/')) return 'setting';
-  if (rel.startsWith('大纲/')) return 'outline';
-  if (rel.startsWith('场景树/')) return 'scene';
-  if (rel.startsWith('正文/')) return 'chapter';
-  return 'reference';
-}
+import {
+  collectSyncMarkdownFiles,
+  inferDocumentType,
+  type Document,
+} from '@lisan/rag';
 
 async function migrateLegacyOutlineIfNeeded(projectRoot: string): Promise<void> {
   const canonicalPath = join(projectRoot, '大纲', 'arc-1.md');
@@ -67,12 +42,7 @@ export const syncCommand = new Command('sync')
     const config = await loadConfig(projectRoot);
     await migrateLegacyOutlineIfNeeded(projectRoot);
 
-    // 扫描需要同步的目录
-    const syncDirs = ['设定集', '大纲', '场景树', '正文'];
-    const allFiles: string[] = [];
-    for (const dir of syncDirs) {
-      allFiles.push(...(await scanMarkdownFiles(join(projectRoot, dir))));
-    }
+    const allFiles = await collectSyncMarkdownFiles(projectRoot);
 
     if (allFiles.length === 0) {
       console.log('⚠️  未找到需要同步的 Markdown 文件');
@@ -112,7 +82,7 @@ export const syncCommand = new Command('sync')
         for (const filePath of batch) {
           const content = await readFile(filePath, 'utf-8');
           const rel = relative(projectRoot, filePath).replace(/\\\\/g, '/');
-          const docType = inferDocType(filePath, projectRoot);
+          const docType = inferDocumentType(filePath, projectRoot);
 
           // 提取首行作为摘要
           const firstLine = content.split('\r\n')[0]?.replace(/^#+\\s*/, '').trim() ?? '';

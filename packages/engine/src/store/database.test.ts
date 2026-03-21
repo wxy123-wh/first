@@ -33,6 +33,7 @@ describe('Database', () => {
     expect(tables).toContain('executions');
     expect(tables).toContain('execution_steps');
     expect(tables).toContain('entities');
+    expect(tables).toContain('settings');
 
     const workflowColumns = db.raw
       .prepare("PRAGMA table_info(workflows)")

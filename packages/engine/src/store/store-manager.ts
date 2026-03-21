@@ -1,12 +1,13 @@
 import { nanoid } from 'nanoid';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { basename, dirname, extname, join, relative } from 'node:path';
 import { Database } from './database.js';
 import { CredentialVault } from './credential-vault.js';
 import type {
   Project, TagTemplateEntry, WorkflowDefinition, WorkflowStep,
-  AgentDefinition, SceneCard, Chapter, ChapterStatus,
+  AgentDefinition, SceneCard, Chapter, ChapterStatus, ChapterDeleteStrategy,
   Execution, ExecutionStatus, ExecutionStep, StepStatus, Entity, ProviderDefinition, ProviderType, WorkflowKind,
+  SettingDocument, SettingDocumentSummary,
 } from '../types.js';
 
 const DEFAULT_PROVIDERS: Array<Pick<ProviderDefinition, 'id' | 'name' | 'type' | 'model'>> = [
@@ -32,6 +33,7 @@ const CANONICAL_OUTLINE_RELATIVE_PATH = join('大纲', 'arc-1.md');
 const LEGACY_OUTLINE_RELATIVE_PATH = 'outline.md';
 const ROOT_CONFIG_RELATIVE_PATH = 'lisan.config.yaml';
 const LEGACY_CONFIG_RELATIVE_PATH = join('.lisan', 'config.yaml');
+const SETTINGS_DIRECTORY = '设定集';
 
 const SCENE_NAME_HINT = /场景|拆解|decompose/i;
 const CHAPTER_NAME_HINT = /章节|写作|起草|改写|润色|生成|draft|rewrite|review/i;
@@ -756,6 +758,30 @@ export class StoreManager {
     return { ...row, workflowId: row.workflowId ?? undefined };
   }
 
+  deleteChapter(chapterId: string, strategy: ChapterDeleteStrategy = 'detach'): void {
+    const normalizedId = chapterId.trim();
+    if (!normalizedId) {
+      throw new Error('Chapter id is required');
+    }
+    if (strategy !== 'detach') {
+      throw new Error(`Unsupported chapter delete strategy: ${strategy}`);
+    }
+
+    const chapterExists = this.db.raw
+      .prepare('SELECT id FROM chapters WHERE id = ?')
+      .get(normalizedId) as { id: string } | undefined;
+    if (!chapterExists) {
+      throw new Error(`Chapter not found: ${normalizedId}`);
+    }
+
+    const tx = this.db.raw.transaction(() => {
+      this.db.raw.prepare('UPDATE scenes SET chapterId = NULL WHERE chapterId = ?').run(normalizedId);
+      this.db.raw.prepare('UPDATE executions SET chapterId = NULL WHERE chapterId = ?').run(normalizedId);
+      this.db.raw.prepare('DELETE FROM chapters WHERE id = ?').run(normalizedId);
+    });
+    tx();
+  }
+
   saveChapterContent(chapterId: string, content: string): void {
     const chapter = this.db.raw.prepare('SELECT * FROM chapters WHERE id = ?').get(chapterId) as any;
     if (!chapter) throw new Error(`Chapter not found: ${chapterId}`);
@@ -787,6 +813,411 @@ export class StoreManager {
   saveOutlineContent(content: string): void {
     mkdirSync(dirname(this.canonicalOutlinePath), { recursive: true });
     writeFileSync(this.canonicalOutlinePath, content, 'utf-8');
+  }
+
+  // === Settings Library ===
+
+  private normalizeSettingPath(value: string): string {
+    return value.replace(/\\/g, '/');
+  }
+
+  private settingsDirectoryPath(projectId: string): string {
+    const dir = this.resolveProjectPath(projectId, SETTINGS_DIRECTORY);
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  private normalizeSettingTags(raw: unknown): string[] {
+    const tags = Array.isArray(raw)
+      ? raw
+      : typeof raw === 'string'
+        ? raw
+            .trim()
+            .replace(/^\[/, '')
+            .replace(/\]$/, '')
+            .split(',')
+        : [];
+
+    const deduped: string[] = [];
+    const seen = new Set<string>();
+    for (const item of tags) {
+      if (typeof item !== 'string') {
+        continue;
+      }
+      const cleaned = item
+        .trim()
+        .replace(/^['"]/, '')
+        .replace(/['"]$/, '');
+      if (!cleaned || seen.has(cleaned)) {
+        continue;
+      }
+      seen.add(cleaned);
+      deduped.push(cleaned);
+    }
+    return deduped;
+  }
+
+  private deriveSettingSummary(content: string): string {
+    const lines = content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith('#'));
+    const first = lines[0] ?? '';
+    return first.slice(0, 140);
+  }
+
+  private serializeFrontMatterValue(value: string): string {
+    const normalized = value.replace(/\r?\n/g, ' ').trim();
+    if (!normalized) {
+      return "''";
+    }
+    if (/[:#"'[\],]/.test(normalized)) {
+      return `"${normalized.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+    }
+    return normalized;
+  }
+
+  private parseFrontMatterValue(value: string): string {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return '';
+    }
+    if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+      return trimmed.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\').trim();
+    }
+    return trimmed;
+  }
+
+  private parseSettingFileContent(raw: string, fallbackTitle: string): {
+    id?: string;
+    title: string;
+    tags: string[];
+    content: string;
+    summary: string;
+  } {
+    let content = raw;
+    const metadata: Record<string, string> = {};
+    const frontMatterMatch = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+
+    if (frontMatterMatch) {
+      content = raw.slice(frontMatterMatch[0].length);
+      const frontMatterLines = frontMatterMatch[1].split(/\r?\n/);
+      for (const line of frontMatterLines) {
+        const separator = line.indexOf(':');
+        if (separator === -1) {
+          continue;
+        }
+        const key = line.slice(0, separator).trim();
+        const value = this.parseFrontMatterValue(line.slice(separator + 1));
+        if (!key) {
+          continue;
+        }
+        metadata[key] = value;
+      }
+    }
+
+    const heading = content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.startsWith('# '))
+      ?.replace(/^#\s+/, '')
+      .trim();
+    const title = (metadata.title?.trim() || heading || fallbackTitle).trim() || fallbackTitle;
+    const tags = this.normalizeSettingTags(metadata.tags ?? '');
+    const normalizedContent = content.replace(/\r\n/g, '\n');
+    const summary = metadata.summary?.trim() || this.deriveSettingSummary(normalizedContent);
+
+    return {
+      id: metadata.id?.trim() || undefined,
+      title,
+      tags,
+      content: normalizedContent,
+      summary,
+    };
+  }
+
+  private renderSettingFile(
+    setting: Pick<SettingDocument, 'id' | 'title' | 'tags' | 'summary' | 'updatedAt' | 'content'>,
+  ): string {
+    const normalizedBody = setting.content.replace(/\r\n/g, '\n').replace(/^\n+/, '');
+    const tagsInline = setting.tags.join(', ');
+    const lines = [
+      '---',
+      `id: ${this.serializeFrontMatterValue(setting.id)}`,
+      `title: ${this.serializeFrontMatterValue(setting.title)}`,
+      `tags: ${this.serializeFrontMatterValue(tagsInline)}`,
+      `summary: ${this.serializeFrontMatterValue(setting.summary)}`,
+      `updatedAt: ${this.serializeFrontMatterValue(setting.updatedAt)}`,
+      '---',
+      '',
+      normalizedBody,
+    ];
+    return `${lines.join('\n').replace(/\n+$/, '\n')}\n`;
+  }
+
+  private collectSettingMarkdownFiles(rootDir: string): string[] {
+    const files: string[] = [];
+    const entries = readdirSync(rootDir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = join(rootDir, entry.name);
+      if (entry.isDirectory()) {
+        files.push(...this.collectSettingMarkdownFiles(fullPath));
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      const extension = extname(entry.name).toLowerCase();
+      if (extension === '.md' || extension === '.markdown') {
+        files.push(fullPath);
+      }
+    }
+    return files;
+  }
+
+  private toSettingSummary(row: any): SettingDocumentSummary {
+    return {
+      id: row.id,
+      projectId: row.projectId,
+      title: row.title,
+      tags: this.normalizeSettingTags(row.tags ? JSON.parse(row.tags) : []),
+      summary: row.summary ?? '',
+      filePath: row.filePath,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    };
+  }
+
+  private nextSettingFilePath(projectId: string, title: string, currentId?: string): string {
+    const slug = title
+      .toLowerCase()
+      .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '-')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '');
+    const baseName = slug || `setting-${(currentId ?? nanoid()).slice(0, 8)}`;
+    const existingRows = this.db.raw
+      .prepare('SELECT id, filePath FROM settings WHERE projectId = ?')
+      .all(projectId) as Array<{ id: string; filePath: string }>;
+    const byPath = new Map(
+      existingRows.map((row) => [this.normalizeSettingPath(row.filePath), row.id]),
+    );
+
+    let counter = 1;
+    while (counter <= 9999) {
+      const suffix = counter === 1 ? '' : `-${counter}`;
+      const candidate = this.normalizeSettingPath(`${SETTINGS_DIRECTORY}/${baseName}${suffix}.md`);
+      const occupiedBy = byPath.get(candidate);
+      if (!occupiedBy || occupiedBy === currentId) {
+        return candidate;
+      }
+      counter += 1;
+    }
+    return this.normalizeSettingPath(`${SETTINGS_DIRECTORY}/${nanoid()}.md`);
+  }
+
+  private syncSettingsIndex(projectId: string): void {
+    const projectBase = this.resolveProjectPath(projectId);
+    const settingsDir = this.settingsDirectoryPath(projectId);
+    const existingRows = this.db.raw
+      .prepare(
+        'SELECT id, projectId, title, tags, summary, filePath, createdAt, updatedAt FROM settings WHERE projectId = ?',
+      )
+      .all(projectId) as any[];
+    const rowByPath = new Map<string, any>(
+      existingRows.map((row) => [this.normalizeSettingPath(row.filePath), row]),
+    );
+    const seenPaths = new Set<string>();
+    const now = new Date().toISOString();
+
+    const upsert = this.db.raw.prepare(`
+      INSERT OR REPLACE INTO settings (id, projectId, title, tags, summary, filePath, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const deleteMissing = this.db.raw.prepare(
+      'DELETE FROM settings WHERE projectId = ? AND filePath = ?',
+    );
+
+    const files = this.collectSettingMarkdownFiles(settingsDir);
+    for (const absolutePath of files) {
+      const relativePath = this.normalizeSettingPath(relative(projectBase, absolutePath));
+      if (!relativePath.startsWith(`${SETTINGS_DIRECTORY}/`)) {
+        continue;
+      }
+      seenPaths.add(relativePath);
+
+      let rawContent: string;
+      try {
+        rawContent = readFileSync(absolutePath, 'utf-8');
+      } catch {
+        continue;
+      }
+
+      const parsed = this.parseSettingFileContent(
+        rawContent,
+        basename(absolutePath, extname(absolutePath)),
+      );
+      const stat = statSync(absolutePath);
+      const previous = rowByPath.get(relativePath);
+      const id = parsed.id || previous?.id || nanoid();
+      const createdAt = previous?.createdAt ?? now;
+      const updatedAt = stat.mtime.toISOString();
+
+      upsert.run(
+        id,
+        projectId,
+        parsed.title,
+        JSON.stringify(parsed.tags),
+        parsed.summary,
+        relativePath,
+        createdAt,
+        updatedAt,
+      );
+    }
+
+    for (const row of existingRows) {
+      const normalizedPath = this.normalizeSettingPath(row.filePath);
+      if (seenPaths.has(normalizedPath)) {
+        continue;
+      }
+      deleteMissing.run(projectId, row.filePath);
+    }
+  }
+
+  listSettings(projectId: string): SettingDocumentSummary[] {
+    this.syncSettingsIndex(projectId);
+    const rows = this.db.raw
+      .prepare(
+        'SELECT id, projectId, title, tags, summary, filePath, createdAt, updatedAt FROM settings WHERE projectId = ? ORDER BY updatedAt DESC',
+      )
+      .all(projectId) as any[];
+    return rows.map((row) => this.toSettingSummary(row));
+  }
+
+  getSetting(id: string): SettingDocument {
+    const current = this.db.raw
+      .prepare('SELECT id, projectId FROM settings WHERE id = ?')
+      .get(id) as { id: string; projectId: string } | undefined;
+    if (!current) {
+      throw new Error(`Setting not found: ${id}`);
+    }
+
+    this.syncSettingsIndex(current.projectId);
+
+    const row = this.db.raw
+      .prepare(
+        'SELECT id, projectId, title, tags, summary, filePath, createdAt, updatedAt FROM settings WHERE id = ?',
+      )
+      .get(id) as any;
+    if (!row) {
+      throw new Error(`Setting not found: ${id}`);
+    }
+
+    const absolutePath = this.resolveProjectPath(
+      row.projectId,
+      ...this.normalizeSettingPath(row.filePath).split('/'),
+    );
+    const fileContent = readFileSync(absolutePath, 'utf-8');
+    const parsed = this.parseSettingFileContent(fileContent, row.title);
+    const summary = row.summary?.trim() ? row.summary : parsed.summary;
+
+    return {
+      ...this.toSettingSummary({ ...row, summary }),
+      content: parsed.content,
+    };
+  }
+
+  saveSetting(setting: {
+    id?: string;
+    projectId: string;
+    title: string;
+    tags?: string[];
+    summary?: string;
+    content: string;
+  }): SettingDocument {
+    const projectId = setting.projectId.trim();
+    if (!projectId) {
+      throw new Error('Setting projectId is required');
+    }
+    const normalizedTitle = setting.title.trim();
+    if (!normalizedTitle) {
+      throw new Error('Setting title is required');
+    }
+
+    this.syncSettingsIndex(projectId);
+
+    const now = new Date().toISOString();
+    const normalizedId = setting.id?.trim() || '';
+    const existing = normalizedId
+      ? (this.db.raw
+          .prepare(
+            'SELECT id, projectId, title, tags, summary, filePath, createdAt, updatedAt FROM settings WHERE id = ?',
+          )
+          .get(normalizedId) as any | undefined)
+      : undefined;
+    if (existing && existing.projectId !== projectId) {
+      throw new Error(`Setting ${normalizedId} does not belong to project ${projectId}`);
+    }
+    const id = (existing?.id ?? normalizedId) || nanoid();
+    const createdAt = existing?.createdAt ?? now;
+    const updatedAt = now;
+    const tags = this.normalizeSettingTags(setting.tags ?? []);
+    const content = setting.content.replace(/\r\n/g, '\n');
+    const summary = setting.summary?.trim() || this.deriveSettingSummary(content);
+    const filePath = this.normalizeSettingPath(
+      existing?.filePath ?? this.nextSettingFilePath(projectId, normalizedTitle, id),
+    );
+    const absolutePath = this.resolveProjectPath(projectId, ...filePath.split('/'));
+
+    mkdirSync(dirname(absolutePath), { recursive: true });
+    writeFileSync(
+      absolutePath,
+      this.renderSettingFile({
+        id,
+        title: normalizedTitle,
+        tags,
+        summary,
+        updatedAt,
+        content,
+      }),
+      'utf-8',
+    );
+
+    this.db.raw
+      .prepare(
+        `INSERT OR REPLACE INTO settings (id, projectId, title, tags, summary, filePath, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(id, projectId, normalizedTitle, JSON.stringify(tags), summary, filePath, createdAt, updatedAt);
+
+    return {
+      id,
+      projectId,
+      title: normalizedTitle,
+      tags,
+      summary,
+      filePath,
+      content,
+      createdAt,
+      updatedAt,
+    };
+  }
+
+  deleteSetting(id: string): void {
+    const row = this.db.raw
+      .prepare('SELECT id, projectId, filePath FROM settings WHERE id = ?')
+      .get(id) as { id: string; projectId: string; filePath: string } | undefined;
+    if (!row) {
+      throw new Error(`Setting not found: ${id}`);
+    }
+
+    const absolutePath = this.resolveProjectPath(
+      row.projectId,
+      ...this.normalizeSettingPath(row.filePath).split('/'),
+    );
+    if (existsSync(absolutePath)) {
+      unlinkSync(absolutePath);
+    }
+    this.db.raw.prepare('DELETE FROM settings WHERE id = ?').run(id);
   }
 
   // === Executions ===

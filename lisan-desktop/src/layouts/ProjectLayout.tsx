@@ -20,6 +20,7 @@ const NAV_ITEMS: NavItem[] = [
   { tab: "providers", label: "Provider" },
   { tab: "executions", label: "执行" },
   { tab: "settings", label: "设置" },
+  { tab: "settings-library", label: "设定集" },
 ];
 
 function parseActiveTab(pathname: string): AppTab {
@@ -137,13 +138,22 @@ export default function ProjectLayout() {
           <h1 className="mt-2 text-2xl font-semibold">{projectName}</h1>
           <p className="mt-1 text-xs text-muted-foreground">{statusText}</p>
         </div>
-        <Button
-          variant={activeTab === "settings" ? "default" : "outline"}
-          size="sm"
-          onClick={() => navigate(`/projects/${projectId}/settings`)}
-        >
-          设置
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant={activeTab === "settings" ? "default" : "outline"}
+            size="sm"
+            onClick={() => navigate(`/projects/${projectId}/settings`)}
+          >
+            设置
+          </Button>
+          <Button
+            variant={activeTab === "settings-library" ? "default" : "outline"}
+            size="sm"
+            onClick={() => navigate(`/projects/${projectId}/settings-library`)}
+          >
+            设定集
+          </Button>
+        </div>
       </header>
 
       {isOpening && (

@@ -6,7 +6,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
         Arc,
     },
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 use tauri::{AppHandle, Emitter};
 use tokio::{
@@ -18,6 +18,11 @@ use tokio::{
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const RESTART_DELAY: Duration = Duration::from_secs(1);
+const RAPID_EXIT_THRESHOLD: Duration = Duration::from_secs(5);
+const MAX_RAPID_RESTARTS: u32 = 3;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[derive(Clone)]
 pub struct SidecarManager {
@@ -28,6 +33,7 @@ struct SidecarInner {
     workspace_root: PathBuf,
     node_binary: String,
     process: Mutex<Option<SidecarProcess>>,
+    restart_policy: Mutex<RestartPolicyState>,
     pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>,
     next_request_id: AtomicU64,
     next_process_id: AtomicU64,
@@ -36,8 +42,19 @@ struct SidecarInner {
 struct SidecarProcess {
     id: u64,
     project_path: PathBuf,
+    started_at: Instant,
     stdin: Arc<Mutex<ChildStdin>>,
     child: Arc<Mutex<Child>>,
+}
+
+#[derive(Default)]
+struct RestartPolicyState {
+    rapid_exit_count: u32,
+}
+
+enum RestartDecision {
+    Restart,
+    Stop,
 }
 
 impl SidecarManager {
@@ -47,6 +64,7 @@ impl SidecarManager {
                 workspace_root,
                 node_binary: std::env::var("LISAN_NODE_BIN").unwrap_or_else(|_| "node".to_string()),
                 process: Mutex::new(None),
+                restart_policy: Mutex::new(RestartPolicyState::default()),
                 pending: Mutex::new(HashMap::new()),
                 next_request_id: AtomicU64::new(1),
                 next_process_id: AtomicU64::new(1),
@@ -163,16 +181,27 @@ impl SidecarManager {
         validate_sidecar_build_consistency(&self.inner.workspace_root, &sidecar_script)?;
 
         let project_arg = project_path.to_string_lossy().to_string();
-        let mut child = Command::new(&self.inner.node_binary)
+        let mut command = Command::new(&self.inner.node_binary);
+        command
             .arg(&sidecar_script)
             .arg("--project-path")
             .arg(&project_arg)
             .current_dir(&self.inner.workspace_root)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|err| format!("Failed to spawn sidecar: {err}"))?;
+            .stderr(std::process::Stdio::piped());
+
+        #[cfg(windows)]
+        {
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
+        let mut child = command.spawn().map_err(|err| {
+            format!(
+                "Failed to spawn sidecar with LISAN_NODE_BIN='{}': {err}",
+                self.inner.node_binary
+            )
+        })?;
 
         let stdin = child
             .stdin
@@ -192,6 +221,7 @@ impl SidecarManager {
         let process = SidecarProcess {
             id: process_id,
             project_path: project_path.clone(),
+            started_at: Instant::now(),
             stdin: Arc::new(Mutex::new(stdin)),
             child: child.clone(),
         };
@@ -375,17 +405,29 @@ impl SidecarManager {
                 };
 
                 if let Some(exit_status) = status {
-                    let should_restart = {
+                    let (should_restart, stop_reason) = {
                         let mut guard = manager.inner.process.lock().await;
                         if let Some(current) = guard.as_ref() {
                             if current.id == process_id {
+                                let uptime = current.started_at.elapsed();
                                 guard.take();
-                                true
+                                let mut policy = manager.inner.restart_policy.lock().await;
+                                match evaluate_restart_policy(&mut policy, uptime) {
+                                    RestartDecision::Restart => (true, None),
+                                    RestartDecision::Stop => {
+                                        let message = format!(
+                                            "Sidecar 连续快速退出（code={:?}）。已暂停自动重启，避免无限弹窗。请检查 LISAN_NODE_BIN（当前: {}）并确认可手动运行 sidecar。",
+                                            exit_status.code(),
+                                            manager.inner.node_binary
+                                        );
+                                        (false, Some(message))
+                                    }
+                                }
                             } else {
-                                false
+                                (false, None)
                             }
                         } else {
-                            false
+                            (false, None)
                         }
                     };
 
@@ -409,6 +451,9 @@ impl SidecarManager {
                                 json!({ "message": format!("Failed to restart sidecar: {err}") }),
                             );
                         }
+                    }
+                    if let Some(message) = stop_reason {
+                        let _ = app.emit("sidecar:error", json!({ "message": message }));
                     }
 
                     break;
@@ -476,6 +521,19 @@ fn canonicalize_or_clone(path: PathBuf) -> PathBuf {
 fn is_method_not_found(err: &str) -> bool {
     let normalized = err.to_ascii_lowercase();
     normalized.contains("method not found") || normalized.contains("rpc error -32601")
+}
+
+fn evaluate_restart_policy(state: &mut RestartPolicyState, uptime: Duration) -> RestartDecision {
+    if uptime <= RAPID_EXIT_THRESHOLD {
+        state.rapid_exit_count = state.rapid_exit_count.saturating_add(1);
+        if state.rapid_exit_count > MAX_RAPID_RESTARTS {
+            return RestartDecision::Stop;
+        }
+        return RestartDecision::Restart;
+    }
+
+    state.rapid_exit_count = 0;
+    RestartDecision::Restart
 }
 
 fn validate_sidecar_build_consistency(
@@ -611,5 +669,32 @@ mod tests {
         assert!(result.is_ok());
 
         let _ = std::fs::remove_dir_all(workspace);
+    }
+
+    #[test]
+    fn restart_policy_stops_after_too_many_rapid_exits() {
+        let mut state = RestartPolicyState::default();
+        let rapid_uptime = Duration::from_millis(300);
+
+        for _ in 0..MAX_RAPID_RESTARTS {
+            let decision = evaluate_restart_policy(&mut state, rapid_uptime);
+            assert!(matches!(decision, RestartDecision::Restart));
+        }
+
+        let blocked = evaluate_restart_policy(&mut state, rapid_uptime);
+        assert!(matches!(blocked, RestartDecision::Stop));
+    }
+
+    #[test]
+    fn restart_policy_resets_after_stable_run() {
+        let mut state = RestartPolicyState::default();
+        let rapid_uptime = Duration::from_millis(300);
+        let stable_uptime = RAPID_EXIT_THRESHOLD + Duration::from_secs(1);
+
+        let _ = evaluate_restart_policy(&mut state, rapid_uptime);
+        let _ = evaluate_restart_policy(&mut state, stable_uptime);
+
+        let decision = evaluate_restart_policy(&mut state, rapid_uptime);
+        assert!(matches!(decision, RestartDecision::Restart));
     }
 }

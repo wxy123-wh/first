@@ -18,7 +18,7 @@
 
 - `store/database.ts`
   - 初始化 `.lisan/lisan.db`
-  - 维护表结构：`projects/providers/workflows/workflow_steps/agents/chapters/scenes/executions/execution_steps/entities`
+  - 维护表结构：`projects/providers/workflows/workflow_steps/agents/chapters/scenes/executions/execution_steps/entities/settings`
   - 启用 WAL 与外键
   - 负责列级迁移（`providers.model/apiKeyCiphertext`，`workflows.kind`）
 
@@ -28,11 +28,13 @@
   - 支持 `encrypt/decrypt` 与旧数据平滑迁移
 
 - `store/store-manager.ts`
-  - 统一仓储服务，覆盖项目/Provider/Workflow/Agent/Scene/Chapter/Execution/Entity
+  - 统一仓储服务，覆盖项目/Provider/Workflow/Agent/Scene/Chapter/Execution/Entity/Setting
   - 自动补齐默认 Provider
   - 自动迁移旧大纲路径（`outline.md` -> `大纲/arc-1.md`）
   - 自动推断并回填 `workflow.kind`
   - 在空 Agent 基线下可从 `lisan.config.yaml`（`llm.orchestrator/worker`）引导 Provider 默认模型
+  - 章节删除支持 `detach` 策略（解绑关联场景与执行记录）
+  - 设定集支持“文件为源 + SQLite 索引”双向同步（`设定集/**/*.md`）
 
 ### 2.2 agent 子模块
 
@@ -40,6 +42,7 @@
   - 内置 Agent 启动引导（seed）
   - 自定义 Agent 注册、更新、复制、删除
   - 内置 Agent Markdown 文件保护
+  - 内置 Agent 优先从 `agent/presets/*/agent.md` 加载默认提示词
 
 - `agent/executor.ts`
   - 负责模板渲染后调用 LLM Provider
@@ -51,7 +54,7 @@
 
 - `workflow/context-builder.ts`
   - 构建章节上下文（场景、实体、上一章尾部）
-  - 构建拆解上下文（大纲、已有场景、标签模板）
+  - 构建拆解上下文（大纲、可选章节信息、已有场景、最近场景摘要、设定集摘要、标签模板约束）
   - 章节上下文仅纳入当前章节绑定场景（`scene.chapterId === chapterId`）
 
 - `workflow/defaults.ts`
@@ -65,8 +68,14 @@
   - 每步写 execution_step 记录
   - 渲染模板后检查未解析占位符
   - step 未显式覆盖 `model` 时，按 Provider 默认模型解析执行
+  - 场景输出解析支持 `object.scenes`、数组根节点、JSON fenced block，并在解析失败时尝试一次自动修复
+  - 场景对象执行最小字段校验（`title/eventSkeleton/tags`），不合法条目会被跳过并写入摘要提示
+  - 场景工作流在“需要场景产出但最终 0 条落库”时会标记 `failed` 并写明原因（避免静默成功）
+  - 场景三阶段（拆解/过渡/检验）使用分离指令模板，过渡/检验步骤可注入上一阶段输出
+  - 缺少 `sourceOutline/instructions` 时会抛出“缺少关键上下文”显式错误
   - 从 step 输出解析场景 JSON 并去重落库
   - 场景缺失 `chapterId` 时可按入口章节兜底绑定，并在完成摘要提示
+  - `workflow:complete` 摘要包含本次绑定/未绑定数量与解析修复次数
   - 章节流完成后自动回写正文（`primaryOutput` 优先，回退最后有效文本输出）
   - 正文回写失败会将 execution 置为 `failed`，避免“假成功”
   - 事件推送：`workflow:*`、`step:*`
@@ -78,8 +87,9 @@
 
 - `sidecar/main.ts`
   - JSON-RPC over stdio 服务入口
-  - 注册 `project/workflow/agent/provider/scene/chapter/execution/entity` 方法
+  - 注册 `project/workflow/agent/provider/scene/chapter/setting/execution/entity/rag` 方法
   - 转发 runtime 事件为 JSON-RPC 通知
+  - 转发 RAG 同步事件（`rag:sync:*`）为 JSON-RPC 通知
   - `workflow.run` 异常以 `workflow:error` 通知上报
 
 - `sidecar/rpc-server.ts`
@@ -90,6 +100,7 @@
 - `truth/truth-manager.ts`：真相文件读写、结算应用、滞留伏笔标记
 - `checker/post-write-checker.ts`：11 条确定性规则检查
 - `template/engine.ts`：模板渲染
+- `rag/sync-service.ts`：扫描 `设定集/大纲/场景树/正文/chapters` 并执行向量库同步，产出进度/失败统计
 - `engine.ts`：Engine 组装入口（Store + AgentRegistry + AgentExecutor + WorkflowRuntime）
 
 ## 3. LLM（`packages/llm`）
@@ -104,6 +115,7 @@
 - `LanceDBStore`：向量检索 + FTS 检索 + upsert/delete/getById
 - `DashScopeEmbeddingProvider`：支持分批嵌入与排序回填
 - `layers.ts`：L0 摘要 / L1 概览 / L2 全文三层读取
+- `sync-utils.ts`：共享 Markdown 扫描与 `DocumentType` 推断（供 Engine/CLI 共用）
 
 ## 5. Desktop（`lisan-desktop`）
 
@@ -111,27 +123,30 @@
 
 - `ProjectsPage`：项目列表（读 `.lisan/lisan.db` 聚合：章节数/最近执行时间/最新执行状态）+ 删除
 - `NewProjectPage`：创建项目（创建时将 `llmConfig` 写入项目配置并引导 Provider 默认模型）
-- `OutlinePage`：编辑大纲 + 触发场景拆解
-- `ScenesPage`：场景树编辑 + AI 生成 + 排序 + 未绑定章节筛选/修复
-- `ChaptersPage`：章节创建、正文编辑、workflow 切换即时持久化、运行工作流（完成后自动刷新正文）
-- `WorkflowsPage`：工作流编辑、步骤拖拽排序
+- `OutlinePage`：编辑大纲 + 触发场景拆解（支持“不绑定章节 / 绑定到章节”）
+- `ScenesPage`：场景树编辑 + AI 生成 + 排序 + 章节筛选 + 批量绑定/解绑
+- `ChaptersPage`：章节创建、删除、正文编辑、workflow 切换即时持久化、运行工作流（完成后自动刷新正文）
+- `WorkflowsPage`：工作流编辑、步骤拖拽排序、失效智能体引用提示
 - `AgentsPage` / `AgentEditPage`：智能体维护、复制内置、Provider 切换
 - `ProvidersPage`：Provider 参数维护（model/baseUrl/apiKey）
-- `ExecutionsPage` / `ExecutionDetailPage`：执行历史、实时控制（pause/resume/skip/abort）与状态反馈
-- `SettingsPage` / `RagSyncPage`：项目标签模板与 RAG 状态页（当前为禁用态）
+- `ExecutionsPage` / `ExecutionDetailPage`：执行历史、实时控制（pause/resume/skip/abort）、失效引用兜底显示、诊断视图（内部 ID 开关）
+- `SettingsPage`：项目标签模板 + RAG 入口
+- `SettingsLibraryPage`：设定集列表/编辑/删除/标签过滤
+- `RagSyncPage`：RAG 同步执行、进度、成功/失败统计与失败明细
 
 ### 5.2 前端关键抽象
 
 - `hooks/useSidecar.ts`：统一 command 调用接口
 - `hooks/useWorkflowEvents.ts`：订阅 sidecar 通知并入全局状态
 - `lib/store.ts`：`currentProject/activeTab/sidecar/workflowEvents` 状态中心
+- `lib/display-name.ts`：统一“优先名称、缺失时展示已删除对象 + ID 后 6 位”显示规则
 - `types/engine.ts`：前后端共享语义类型
 
 ## 6. Tauri（`lisan-desktop/src-tauri`）
 
 - `commands/mod.rs`：Tauri command 到 sidecar RPC 的映射层，含 fallback 策略
 - `commands/projects.rs`：本地项目扫描/创建/删除（无需 sidecar）；首页统计由 DB 聚合并统一状态枚举
-- `sidecar.rs`：sidecar 进程生命周期、请求超时、掉线重启、构建一致性校验
+- `sidecar.rs`：sidecar 进程生命周期、请求超时、掉线重启、构建一致性校验、连续快速退出熔断策略
 - `state.rs`：全局状态（workspace_root + sidecar manager）
 
 ## 7. 兼容保留模块

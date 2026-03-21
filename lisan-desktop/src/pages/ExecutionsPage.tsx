@@ -10,6 +10,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useSidecar } from "@/hooks/useSidecar";
+import { resolveDisplayName } from "@/lib/display-name";
 import { useAppStore } from "@/lib/store";
 import type { Chapter, Execution, WorkflowDefinition } from "@/types/engine";
 
@@ -108,6 +109,15 @@ export default function ExecutionsPage() {
       >,
     [workflows],
   );
+  const hasBrokenReferences = useMemo(
+    () =>
+      executions.some(
+        (execution) =>
+          (execution.chapterId && !chapterNameMap[execution.chapterId]) ||
+          !workflowNameMap[execution.workflowId],
+      ),
+    [executions, chapterNameMap, workflowNameMap],
+  );
 
   if (!currentProject?.id) {
     return <p className="text-sm text-muted-foreground">请先打开项目。</p>;
@@ -131,6 +141,11 @@ export default function ExecutionsPage() {
           {error}
         </div>
       )}
+      {hasBrokenReferences && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900">
+          检测到引用失效：部分执行记录关联的章节或工作流已删除，列表已自动显示可读兜底名称。
+        </div>
+      )}
 
       {executions.length === 0 ? (
         <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
@@ -152,9 +167,21 @@ export default function ExecutionsPage() {
             {executions.map((execution) => (
               <TableRow key={execution.id}>
                 <TableCell>
-                  {execution.chapterId ? chapterNameMap[execution.chapterId] ?? execution.chapterId : "无"}
+                  {resolveDisplayName({
+                    id: execution.chapterId,
+                    nameById: chapterNameMap,
+                    emptyLabel: "无",
+                    missingLabel: "已删除章节",
+                  })}
                 </TableCell>
-                <TableCell>{workflowNameMap[execution.workflowId] ?? execution.workflowId}</TableCell>
+                <TableCell>
+                  {resolveDisplayName({
+                    id: execution.workflowId,
+                    nameById: workflowNameMap,
+                    emptyLabel: "未知工作流",
+                    missingLabel: "已删除工作流",
+                  })}
+                </TableCell>
                 <TableCell>
                   <Badge variant={statusVariant(execution.status)}>{execution.status}</Badge>
                 </TableCell>

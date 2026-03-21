@@ -137,6 +137,21 @@ export interface SidecarProjectOpenResult {
   projectName?: string;
 }
 
+export interface SettingDocumentSummary {
+  id: string;
+  projectId: string;
+  title: string;
+  tags: string[];
+  summary: string;
+  filePath: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SettingDocument extends SettingDocumentSummary {
+  content: string;
+}
+
 export interface WorkflowRunOptions {
   workflowId: string;
   chapterId?: string;
@@ -154,6 +169,37 @@ export interface WorkflowNotification {
   receivedAt: string;
 }
 
+export type RagSyncStage = "idle" | "scanning" | "syncing" | "completed" | "failed";
+
+export interface RagSyncFailure {
+  file: string;
+  reason: string;
+}
+
+export interface RagSyncStats {
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+}
+
+export interface RagSyncStatus {
+  stage: RagSyncStage;
+  running: boolean;
+  runId: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  message: string;
+  currentFile: string | null;
+  stats: RagSyncStats;
+  failures: RagSyncFailure[];
+}
+
+export interface RagSyncStartResult {
+  started: boolean;
+  status: RagSyncStatus;
+}
+
 export type AppTab =
   | "outline"
   | "scenes"
@@ -162,7 +208,8 @@ export type AppTab =
   | "agents"
   | "providers"
   | "executions"
-  | "settings";
+  | "settings"
+  | "settings-library";
 
 export interface CurrentProject {
   id: string;

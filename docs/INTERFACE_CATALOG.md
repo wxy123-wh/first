@@ -17,12 +17,15 @@
 - `AgentDefinition`：Agent 数据模型（内置/自定义）
 - `SceneCard`：场景卡（章节归属、角色、地点、事件骨架、标签）
 - `ChapterStatus`：章节状态枚举
+- `ChapterDeleteStrategy`：章节删除策略（当前支持 `detach`）
 - `Chapter`：章节信息与正文路径
 - `ExecutionStatus`：执行状态枚举（`pending/running/completed/failed`）
 - `StepStatus`：步骤状态枚举（`pending/running/completed/failed/skipped`）
 - `Execution`：一次工作流执行实例
 - `ExecutionStep`：执行中的单步骤记录
 - `Entity`：结构化实体
+- `SettingDocumentSummary` / `SettingDocument`：设定集索引与正文模型
+- `SceneGenerationChapterContext` / `DecomposeContext`：场景拆解上下文模型
 
 ### 1.2 执行与注册（`packages/engine/src/agent/*.ts`）
 
@@ -33,7 +36,7 @@
 ### 1.3 上下文与事件（`packages/engine/src/workflow/*.ts`）
 
 - `ChapterContext`（`workflow/context-builder.ts`）
-- `DecomposeContext`（`workflow/context-builder.ts`）
+- `DecomposeContext`（`types.ts`，`context-builder.ts` 复用）
 - `WorkflowEvent`（`workflow/events.ts`，含 `step:skipped` 事件）
 - `WorkflowEventHandler`（`workflow/events.ts`）
 
@@ -45,6 +48,17 @@
 ### 1.5 Engine 入口（`packages/engine/src/engine.ts`）
 
 - `EngineOptions`
+
+### 1.6 Engine RAG 同步接口（`packages/engine/src/rag/sync-service.ts`）
+
+- `RagSyncStage`
+- `RagSyncFailure`
+- `RagSyncStats`
+- `RagSyncStatus`
+- `RagSyncEvent`
+- `RagSyncStartResult`
+- `scanMarkdownFiles`
+- `inferDocumentType`
 
 ## 2. LLM 接口
 
@@ -71,6 +85,7 @@
 额外配置接口：
 - `LanceDBStoreConfig`（`lancedb-store.ts`）
 - `DashScopeEmbeddingConfig`（`dashscope-embedding.ts`）
+- `DEFAULT_SYNC_DIRS` / `scanMarkdownFiles` / `inferDocumentType` / `collectSyncMarkdownFiles`（`sync-utils.ts`，Engine/CLI 共用）
 
 ## 4. Desktop 前端接口
 
@@ -94,6 +109,13 @@
 - `ExecutionStep`
 - `ExecutionDetail`
 - `SidecarProjectOpenResult`
+- `SettingDocumentSummary`
+- `SettingDocument`
+- `RagSyncStage`
+- `RagSyncFailure`
+- `RagSyncStats`
+- `RagSyncStatus`
+- `RagSyncStartResult`
 - `WorkflowRunOptions`
 - `WorkflowRerunOptions`
 - `WorkflowNotification`
@@ -109,8 +131,10 @@
   - agent: `agentList/agentSave/agentDelete/agentGetMd/agentSaveMd`
   - provider: `providerList/providerSave/providerDelete`
   - scene: `sceneList/sceneSave/sceneDelete/sceneReorder`
-  - chapter: `chapterList/chapterSave/chapterCreate/chapterGetContent/chapterSaveContent`
+  - chapter: `chapterList/chapterSave/chapterCreate/chapterDelete/chapterGetContent/chapterSaveContent`
+  - setting: `settingList/settingGet/settingSave/settingDelete`
   - execution: `executionList/executionDetail`
+  - rag: `ragSync/ragStatus`
 
 ### 4.3 兼容旧页面类型（`lisan-desktop/src/types/lisan.ts`）
 
@@ -157,8 +181,10 @@
 - 智能体：`agent_list/agent_save/agent_delete/agent_get_md/agent_save_md`
 - Provider：`provider_list/provider_save/provider_delete`
 - 场景：`scene_list/scene_save/scene_delete/scene_reorder`
-- 章节：`chapter_list/chapter_save/chapter_create/chapter_get_content/chapter_save_content`
+- 章节：`chapter_list/chapter_save/chapter_create/chapter_delete/chapter_get_content/chapter_save_content`
+- 设定集：`setting_list/setting_get/setting_save/setting_delete`
 - 执行：`execution_list/execution_detail`
+- RAG：`rag_sync/rag_status`
 
 ## 6. 兼容包接口（简表）
 

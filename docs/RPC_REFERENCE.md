@@ -42,9 +42,16 @@
 | `chapter_get_content` | `chapter.getContent` | - | 读取章节正文 |
 | `chapter_save` | `chapter.save` | `chapter.create` | 保存章节 |
 | `chapter_create` | `chapter.create` | `chapter.save` | 创建章节 |
+| `chapter_delete` | `chapter.delete` | - | 删除章节（默认 `detach` 解绑关联场景与执行） |
 | `chapter_save_content` | `chapter.saveContent` | - | 保存正文 |
+| `setting_list` | `setting.list` | - | 设定集列表 |
+| `setting_get` | `setting.get` | - | 读取设定详情 |
+| `setting_save` | `setting.save` | - | 新增/更新设定 |
+| `setting_delete` | `setting.delete` | - | 删除设定 |
 | `execution_list` | `execution.list` | - | 执行列表 |
 | `execution_detail` | `execution.detail` | `execution.get` | 执行详情 |
+| `rag_sync` | `rag.sync` | - | 启动 RAG 同步 |
+| `rag_status` | `rag.status` | - | 查询 RAG 同步状态 |
 
 ### 2.1 关键接口参数（当前主链路）
 
@@ -93,6 +100,46 @@
   - 返回：`null`
   - 说明：章节工作流完成后，runtime 会调用同名存储能力完成正文自动回写（对前端表现为内容已更新）
 
+#### `chapter.delete`
+
+- 入口：Tauri `chapter_delete` -> RPC `chapter.delete`
+- 参数：
+  - `id: string`
+  - `strategy?: "detach"`（默认 `detach`）
+- 返回：`null`
+- 行为：删除章节前先将关联 `scenes.chapterId` 与 `executions.chapterId` 置空，避免外键/历史记录损坏
+
+#### `setting.list` / `setting.get` / `setting.save` / `setting.delete`
+
+- `setting.list`：
+  - 参数：`projectId: string`
+  - 返回：`SettingDocumentSummary[]`
+  - 说明：读取前会先执行目录同步（`设定集/**/*.md` -> SQLite 索引）
+- `setting.get`：
+  - 参数：`id: string`
+  - 返回：`SettingDocument`
+- `setting.save`：
+  - 参数：`setting: { id?, projectId, title, tags?, summary?, content }`
+  - 返回：`SettingDocument`
+  - 说明：写入文件并更新索引，文件 front matter 含 `id/title/tags/summary/updatedAt`
+- `setting.delete`：
+  - 参数：`id: string`
+  - 返回：`null`
+  - 说明：同时删除设定文件和索引记录
+
+#### `rag.sync` / `rag.status`
+
+- `rag.sync`：
+  - 入口：Tauri `rag_sync` -> RPC `rag.sync`
+  - 参数：无
+  - 返回：`{ started: boolean, status: RagSyncStatus }`
+  - 行为：异步扫描并同步 `设定集/大纲/场景树/正文/chapters` 下 Markdown 文件到向量库
+- `rag.status`：
+  - 入口：Tauri `rag_status` -> RPC `rag.status`
+  - 参数：无
+  - 返回：`RagSyncStatus`
+  - 兼容：若 sidecar 不支持该方法，Rust 层会返回一个 `idle + running=false` 的兜底状态对象
+
 ## 3. 本地 command（不经过 sidecar）
 
 | Command | 文件 | 说明 |
@@ -124,11 +171,21 @@
 
 前端通过 `useWorkflowEvents()` 订阅并缓存到 `useAppStore().workflowEvents`。
 
+### 4.3 RAG 同步事件（sidecar JSON-RPC 通知）
+
+- `rag:sync:start`
+- `rag:sync:progress`
+- `rag:sync:complete`
+- `rag:sync:failed`
+
+Tauri 会转发为前端事件名：`sidecar:rag:sync:start/progress/complete/failed`。
+
 ## 5. 兼容与容错要点
 
 - 方法不存在：优先走 fallback 方法名（`call_with_fallback`）
 - 请求超时：`REQUEST_TIMEOUT = 120s`
 - sidecar 异常退出：自动重启（延迟 1 秒）
+- 连续快速退出熔断：若 sidecar 短时间连续退出超过阈值，会暂停自动重启并通过 `sidecar:error` 提示检查 `LISAN_NODE_BIN`
 - sidecar 构建过旧：会阻止启动并提示先重建 `@lisan/engine`
 
 ## 6. 错误码与鉴权
@@ -158,4 +215,11 @@ await invoke("chapter_save_content", {
   id: "chapter_001",
   content: "# 第1章 ...",
 });
+
+await invoke("chapter_delete", {
+  id: "chapter_001",
+  strategy: "detach",
+});
+
+await invoke("rag_sync");
 ```

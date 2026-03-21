@@ -20,6 +20,8 @@ interface ContextMenuState {
   selectedText: string;
 }
 
+type SceneBindMode = "unbound" | "chapter";
+
 export default function OutlinePage() {
   const sidecar = useSidecar();
   const navigate = useNavigate();
@@ -34,6 +36,7 @@ export default function OutlinePage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [bindMode, setBindMode] = useState<SceneBindMode>("unbound");
   const [selectedChapterId, setSelectedChapterId] = useState<string>("");
 
   useEffect(() => {
@@ -102,7 +105,8 @@ export default function OutlinePage() {
     if (!currentProject?.id) {
       return;
     }
-    if (!selectedChapterId) {
+    const shouldBindChapter = bindMode === "chapter";
+    if (shouldBindChapter && !selectedChapterId) {
       setError("请先创建并选择目标章节，再执行场景拆解。");
       return;
     }
@@ -124,16 +128,18 @@ export default function OutlinePage() {
 
       await sidecar.workflowRun({
         workflowId: workflow.id,
-        chapterId: selectedChapterId,
+        chapterId: shouldBindChapter ? selectedChapterId : undefined,
         globalContext: {
           sourceOutline: selected,
         },
       });
 
-      const targetChapter = chapters.find((chapter) => chapter.id === selectedChapterId);
+      const targetChapter = shouldBindChapter
+        ? chapters.find((chapter) => chapter.id === selectedChapterId)
+        : undefined;
       const chapterLabel = targetChapter
         ? `第${targetChapter.number}章 ${targetChapter.title}`
-        : "目标章节";
+        : "未绑定章节";
       setNotice(`已触发「${workflow.name}」拆解流程（${chapterLabel}），正在跳转到执行页查看进度。`);
       if (routeProjectId) {
         navigate(`/projects/${routeProjectId}/executions`);
@@ -176,12 +182,24 @@ export default function OutlinePage() {
         <div>
           <h2 className="text-lg font-semibold">大纲/arc-1.md</h2>
           <p className="text-xs text-muted-foreground">
-            选中文本后右键可直接触发“拆解为场景”。
+            选中文本后右键可直接触发“拆解为场景”，支持不绑定章节。
           </p>
         </div>
         <div className="flex gap-2">
+          <Select
+            value={bindMode}
+            onValueChange={(value) => setBindMode(value === "chapter" ? "chapter" : "unbound")}
+          >
+            <SelectTrigger className="w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unbound">不绑定章节</SelectItem>
+              <SelectItem value="chapter">绑定到章节</SelectItem>
+            </SelectContent>
+          </Select>
           <Select value={selectedChapterId} onValueChange={(value) => setSelectedChapterId(value ?? "")}>
-            <SelectTrigger className="w-52">
+            <SelectTrigger className="w-52" disabled={bindMode !== "chapter" || chapters.length === 0}>
               <SelectValue placeholder="选择目标章节" />
             </SelectTrigger>
             <SelectContent>
@@ -192,7 +210,11 @@ export default function OutlinePage() {
               ))}
             </SelectContent>
           </Select>
-          <Button variant="outline" onClick={() => runDecompose(outline)} disabled={running}>
+          <Button
+            variant="outline"
+            onClick={() => runDecompose(outline)}
+            disabled={running || (bindMode === "chapter" && !selectedChapterId)}
+          >
             {running ? "执行中..." : "整篇拆解为场景"}
           </Button>
           <Button onClick={saveOutline} disabled={saving}>
