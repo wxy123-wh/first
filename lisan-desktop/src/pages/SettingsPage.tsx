@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useSidecar } from "@/hooks/useSidecar";
+import { getRagSyncState } from "@/lib/rag-sync-state";
 import { useAppStore } from "@/lib/store";
 import type { TagTemplateEntry } from "@/types/engine";
 
@@ -65,9 +66,9 @@ function buildTemplate(rows: TemplateRow[]): { template: TagTemplateEntry[]; err
 }
 
 export default function SettingsPage() {
-  const { id: routeProjectId } = useParams<{ id: string }>();
   const sidecar = useSidecar();
   const currentProject = useAppStore((state) => state.currentProject);
+  const ragSyncState = getRagSyncState();
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -107,13 +108,6 @@ export default function SettingsPage() {
       cancelled = true;
     };
   }, [currentProject?.id, sidecar]);
-
-  const ragSyncPath = useMemo(() => {
-    if (!routeProjectId) {
-      return null;
-    }
-    return `/projects/${routeProjectId}/settings/rag-sync`;
-  }, [routeProjectId]);
 
   const updateRow = (index: number, patch: Partial<TemplateRow>) => {
     setRows((current) =>
@@ -251,19 +245,19 @@ export default function SettingsPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>RAG 同步</CardTitle>
-          <CardDescription>前往 RAG 同步入口页。</CardDescription>
+          <div className="flex items-center gap-2">
+            <CardTitle>RAG 同步</CardTitle>
+            <Badge variant="secondary">{ragSyncState.title}</Badge>
+          </div>
+          <CardDescription>{ragSyncState.reason}</CardDescription>
         </CardHeader>
-        <CardContent>
-          {ragSyncPath ? (
-            <Link to={ragSyncPath}>
-              <Button variant="outline">打开 RAG 同步</Button>
-            </Link>
-          ) : (
-            <Button variant="outline" disabled>
-              打开 RAG 同步
-            </Button>
-          )}
+        <CardContent className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            为避免误导，当前版本已禁用 RAG 同步执行入口。
+          </p>
+          <Button variant="outline" disabled>
+            {ragSyncState.actionLabel}
+          </Button>
         </CardContent>
       </Card>
     </div>

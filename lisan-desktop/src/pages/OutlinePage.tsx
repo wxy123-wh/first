@@ -1,10 +1,18 @@
 import { MouseEvent, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useSidecar } from "@/hooks/useSidecar";
 import { useAppStore } from "@/lib/store";
 import { pickSceneWorkflow } from "@/lib/workflow-kind";
+import type { Chapter } from "@/types/engine";
 
 interface ContextMenuState {
   x: number;
@@ -25,6 +33,8 @@ export default function OutlinePage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [chapters, setChapters] = useState<Chapter[]>([]);
+  const [selectedChapterId, setSelectedChapterId] = useState<string>("");
 
   useEffect(() => {
     if (!currentProject?.id) {
@@ -35,12 +45,19 @@ export default function OutlinePage() {
     setLoading(true);
     setError(null);
 
-    sidecar
-      .outlineGet()
-      .then((content) => {
-        if (!cancelled) {
-          setOutline(content);
+    Promise.all([sidecar.outlineGet(), sidecar.chapterList(currentProject.id)])
+      .then(([content, chapterList]) => {
+        if (cancelled) {
+          return;
         }
+        setOutline(content);
+        setChapters(chapterList);
+        setSelectedChapterId((current) => {
+          if (current && chapterList.some((chapter) => chapter.id === current)) {
+            return current;
+          }
+          return chapterList[0]?.id ?? "";
+        });
       })
       .catch((reason: unknown) => {
         if (!cancelled) {
@@ -85,6 +102,10 @@ export default function OutlinePage() {
     if (!currentProject?.id) {
       return;
     }
+    if (!selectedChapterId) {
+      setError("请先创建并选择目标章节，再执行场景拆解。");
+      return;
+    }
     const selected = sourceOutline.trim();
     if (!selected) {
       setError("请先选择要拆解的大纲段落。");
@@ -103,12 +124,17 @@ export default function OutlinePage() {
 
       await sidecar.workflowRun({
         workflowId: workflow.id,
+        chapterId: selectedChapterId,
         globalContext: {
           sourceOutline: selected,
         },
       });
 
-      setNotice(`已触发「${workflow.name}」拆解流程，正在跳转到执行页查看进度。`);
+      const targetChapter = chapters.find((chapter) => chapter.id === selectedChapterId);
+      const chapterLabel = targetChapter
+        ? `第${targetChapter.number}章 ${targetChapter.title}`
+        : "目标章节";
+      setNotice(`已触发「${workflow.name}」拆解流程（${chapterLabel}），正在跳转到执行页查看进度。`);
       if (routeProjectId) {
         navigate(`/projects/${routeProjectId}/executions`);
       }
@@ -154,6 +180,18 @@ export default function OutlinePage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <Select value={selectedChapterId} onValueChange={(value) => setSelectedChapterId(value ?? "")}>
+            <SelectTrigger className="w-52">
+              <SelectValue placeholder="选择目标章节" />
+            </SelectTrigger>
+            <SelectContent>
+              {chapters.map((chapter) => (
+                <SelectItem key={chapter.id} value={chapter.id}>
+                  第{chapter.number}章 {chapter.title}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button variant="outline" onClick={() => runDecompose(outline)} disabled={running}>
             {running ? "执行中..." : "整篇拆解为场景"}
           </Button>

@@ -13,13 +13,13 @@
 - `WorkflowKind`：`scene | chapter`
 - `WorkflowDefinition`：工作流主体（含步骤）
 - `WorkflowStep`：步骤顺序、Agent 绑定、启停状态、覆盖配置
-- `StepConfigOverride`：步骤级参数覆盖（温度、tokens、model、provider）
+- `StepConfigOverride`：步骤级参数覆盖（温度、tokens、model、provider、`primaryOutput`）
 - `AgentDefinition`：Agent 数据模型（内置/自定义）
 - `SceneCard`：场景卡（章节归属、角色、地点、事件骨架、标签）
 - `ChapterStatus`：章节状态枚举
 - `Chapter`：章节信息与正文路径
-- `ExecutionStatus`：执行状态枚举
-- `StepStatus`：步骤状态枚举
+- `ExecutionStatus`：执行状态枚举（`pending/running/completed/failed`）
+- `StepStatus`：步骤状态枚举（`pending/running/completed/failed/skipped`）
 - `Execution`：一次工作流执行实例
 - `ExecutionStep`：执行中的单步骤记录
 - `Entity`：结构化实体
@@ -27,14 +27,14 @@
 ### 1.2 执行与注册（`packages/engine/src/agent/*.ts`）
 
 - `RegisterOptions`（`agent/registry.ts`）：注册自定义 Agent 参数
-- `ExecuteOptions`（`agent/executor.ts`）：执行参数（prompt/context/provider/model）
+- `ExecuteOptions`（`agent/executor.ts`）：执行参数（prompt/context/provider/model/signal）
 - `ExecuteResult`（`agent/executor.ts`）：执行结果（text/tokens/duration）
 
 ### 1.3 上下文与事件（`packages/engine/src/workflow/*.ts`）
 
 - `ChapterContext`（`workflow/context-builder.ts`）
 - `DecomposeContext`（`workflow/context-builder.ts`）
-- `WorkflowEvent`（`workflow/events.ts`）
+- `WorkflowEvent`（`workflow/events.ts`，含 `step:skipped` 事件）
 - `WorkflowEventHandler`（`workflow/events.ts`）
 
 ### 1.4 检查器与真相文件（`packages/engine/src/checker|truth/*.ts`）
@@ -51,7 +51,7 @@
 文件：`packages/llm/src/types.ts`
 
 - `LLMMessage`
-- `LLMCallOptions`
+- `LLMCallOptions`（含 `signal`）
 - `LLMStreamChunk`
 - `LLMCallResult`
 - `LLMProvider`
@@ -105,7 +105,7 @@
 - `SidecarApi`：前端可调用的完整业务接口集合
   - project: `projectOpen/projectGet/projectUpdate`
   - outline: `outlineGet/outlineSave`
-  - workflow: `workflowList/workflowSave/workflowRun/pause/resume/skip/rerun/abort`
+  - workflow: `workflowList/workflowSave/workflowRun/workflowPause/workflowResume/workflowSkip/workflowRerun/workflowAbort`
   - agent: `agentList/agentSave/agentDelete/agentGetMd/agentSaveMd`
   - provider: `providerList/providerSave/providerDelete`
   - scene: `sceneList/sceneSave/sceneDelete/sceneReorder`
@@ -123,6 +123,12 @@
 - `PassExecution`
 - `TraceLogEntry`
 
+状态对齐（兼容层）：
+- `Project.status`：`idle/running/completed/failed`
+- `Execution.status`：`running/completed/failed`
+- `PipelineStage.status`：`pending/running/completed/failed`
+- `AgentExecution.status`：`completed/failed`
+
 ## 5. Tauri（Rust）接口
 
 ### 5.1 状态与项目结构体
@@ -132,6 +138,14 @@
 - `LlmProviderConfig`（`src-tauri/src/commands/projects.rs`）
 - `LlmConfig`（`src-tauri/src/commands/projects.rs`）
 - `CreateProjectInput`（`src-tauri/src/commands/projects.rs`）
+
+`CreateProjectInput.llmConfig`：
+- 包含 `orchestrator/worker` 的 `provider/model/temperature`
+- 该配置会写入项目 `lisan.config.yaml`，并在 engine 初始化时引导 Provider 默认模型
+
+`Project`（Tauri）返回字段说明：
+- `chapterCount/lastExecutionTime/status` 来自 `.lisan/lisan.db` 聚合
+- `status` 统一枚举：`idle/running/completed/failed`
 
 ### 5.2 Tauri Command（函数接口）
 

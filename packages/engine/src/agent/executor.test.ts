@@ -135,4 +135,31 @@ describe('AgentExecutor', () => {
       }),
     );
   });
+
+  it('passes abort signal to provider call options', async () => {
+    const mockProvider: LLMProvider = {
+      name: 'mock',
+      call: vi.fn().mockResolvedValue({
+        text: 'output',
+        usage: { inputTokens: 5, outputTokens: 7 },
+      }),
+      stream: vi.fn(),
+    };
+
+    const executor = new AgentExecutor(mockProvider);
+    const controller = new AbortController();
+    await executor.execute({
+      agentMd: 'system',
+      promptTemplate: 'user',
+      context: {},
+      model: 'gpt-4o',
+      signal: controller.signal,
+    });
+
+    expect(mockProvider.call).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signal: controller.signal,
+      }),
+    );
+  });
 });

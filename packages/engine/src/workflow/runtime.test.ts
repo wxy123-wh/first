@@ -26,6 +26,32 @@ function makeMockProvider(responses: string[] = ['output-1', 'output-2', 'output
   };
 }
 
+function waitForAbort(signal?: AbortSignal, timeoutMs = 300): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!signal) {
+      setTimeout(resolve, timeoutMs);
+      return;
+    }
+    if (signal.aborted) {
+      const error = new Error('aborted');
+      error.name = 'AbortError';
+      reject(error);
+      return;
+    }
+    const timer = setTimeout(resolve, timeoutMs);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        const error = new Error('aborted');
+        error.name = 'AbortError';
+        reject(error);
+      },
+      { once: true },
+    );
+  });
+}
+
 function setupTestEnv() {
   mkdirSync(testDir, { recursive: true });
   const store = new StoreManager(testDir);
@@ -200,6 +226,111 @@ describe('WorkflowRuntime', () => {
     // First step should not have step:complete, only second step should
     const stepCompletes = events.filter(e => e.type === 'step:complete');
     expect(stepCompletes.length).toBe(1);
+  });
+
+  it('aborts running step by cancelling provider call and stops subsequent steps', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    let callCount = 0;
+    let abortSignalCount = 0;
+    const provider: LLMProvider = {
+      name: 'abort-aware-provider',
+      async call(options) {
+        callCount += 1;
+        if (callCount === 1) {
+          try {
+            await waitForAbort(options.signal, 500);
+          } catch (error) {
+            if (error instanceof Error && error.name === 'AbortError') {
+              abortSignalCount += 1;
+              throw error;
+            }
+            throw error;
+          }
+          return { text: 'unexpected-first-output', usage: { inputTokens: 10, outputTokens: 20 } };
+        }
+        return { text: 'unexpected-next-output', usage: { inputTokens: 10, outputTokens: 20 } };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+
+    const runtime = new WorkflowRuntime(env.store, env.registry, new AgentExecutor(provider));
+    const firstStepId = env.workflow.steps[0].id;
+    runtime.on((event) => {
+      if (event.type === 'step:start' && event.stepId === firstStepId) {
+        runtime.abort(event.executionId);
+      }
+    });
+
+    await runtime.run(env.workflow.id, {});
+
+    expect(callCount).toBe(1);
+    expect(abortSignalCount).toBe(1);
+
+    const executions = env.store.getExecutions(env.project.id);
+    expect(executions).toHaveLength(1);
+    expect(executions[0].status).toBe('failed');
+
+    const detail = env.store.getExecutionDetail(executions[0].id);
+    expect(detail.steps).toHaveLength(1);
+    expect(detail.steps[0].status).toBe('failed');
+    expect(detail.steps[0].output).toContain('终止');
+  });
+
+  it('skips running step by cancelling provider call and continues with next step', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    let callCount = 0;
+    let abortSignalCount = 0;
+    const provider: LLMProvider = {
+      name: 'skip-aware-provider',
+      async call(options) {
+        callCount += 1;
+        if (callCount === 1) {
+          try {
+            await waitForAbort(options.signal, 500);
+          } catch (error) {
+            if (error instanceof Error && error.name === 'AbortError') {
+              abortSignalCount += 1;
+              throw error;
+            }
+            throw error;
+          }
+          return { text: 'unexpected-first-output', usage: { inputTokens: 10, outputTokens: 20 } };
+        }
+        return { text: 'second-step-output', usage: { inputTokens: 10, outputTokens: 20 } };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+
+    const runtime = new WorkflowRuntime(env.store, env.registry, new AgentExecutor(provider));
+    const firstStepId = env.workflow.steps[0].id;
+    runtime.on((event) => {
+      if (event.type === 'step:start' && event.stepId === firstStepId) {
+        runtime.skip(event.executionId, firstStepId);
+      }
+    });
+
+    await runtime.run(env.workflow.id, {});
+
+    expect(callCount).toBe(2);
+    expect(abortSignalCount).toBe(1);
+
+    const executions = env.store.getExecutions(env.project.id);
+    expect(executions).toHaveLength(1);
+    expect(executions[0].status).toBe('completed');
+
+    const detail = env.store.getExecutionDetail(executions[0].id);
+    expect(detail.steps).toHaveLength(2);
+    expect(detail.steps[0].status).toBe('skipped');
+    expect(detail.steps[1].status).toBe('completed');
+    expect(detail.steps[1].output).toBe('second-step-output');
   });
 
   it('does not carry skipped steps into later runs', async () => {
@@ -451,6 +582,68 @@ describe('WorkflowRuntime', () => {
     expect(scenes[0].sourceOutline).toBe(sourceOutline);
   });
 
+  it('binds scenes without chapterId to run chapter and reports fallback summary', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const chapter = env.store.saveChapter({
+      projectId: env.project.id,
+      number: 1,
+      title: '第一章',
+      status: 'drafting',
+      contentPath: 'chapters/001.md',
+    });
+
+    const provider: LLMProvider = {
+      name: 'scene-fallback-summary',
+      async call() {
+        return {
+          text: JSON.stringify({
+            scenes: [
+              {
+                title: '无章场景',
+                characters: ['甲'],
+                location: '旧港',
+                eventSkeleton: ['夜行', '遭遇'],
+                tags: { mood: '紧张' },
+              },
+            ],
+          }),
+          usage: { inputTokens: 10, outputTokens: 20 },
+        };
+      },
+      async *stream() {
+        yield { text: 'chunk', finishReason: 'stop' as const };
+      },
+    };
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(provider),
+      new ContextBuilder(env.store),
+    );
+    const events: WorkflowEvent[] = [];
+    runtime.on((event) => events.push(event));
+
+    await runtime.run(
+      env.workflow.id,
+      { sourceOutline: '用于测试 chapterId 兜底绑定' },
+      chapter.id,
+    );
+
+    const scenes = env.store.getScenes(env.project.id);
+    expect(scenes).toHaveLength(1);
+    expect(scenes[0].chapterId).toBe(chapter.id);
+
+    const complete = events.find((event) => event.type === 'workflow:complete');
+    expect(complete?.type).toBe('workflow:complete');
+    if (complete?.type === 'workflow:complete') {
+      expect(complete.summary).toContain('缺失 chapterId');
+      expect(complete.summary).toContain('兜底绑定');
+    }
+  });
+
   it('injects chapter-scoped context fields for chapterId run (chapter/scenes/entities/previousTail)', async () => {
     const env = setupTestEnv();
     store = env.store;
@@ -542,6 +735,87 @@ describe('WorkflowRuntime', () => {
     expect(firstPrompt).toContain('夜巷追击');
     expect(firstPrompt).toContain('卡列尔');
     expect(firstPrompt).toContain('这是第一章末尾收束。');
+  });
+
+  it('writes chapter content from explicit primary output step after chapter workflow completion', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const chapter = env.store.saveChapter({
+      projectId: env.project.id,
+      number: 1,
+      title: '第一章',
+      status: 'drafting',
+      contentPath: 'chapters/001.md',
+    });
+    env.store.saveChapterContent(chapter.id, '# 第一章\n\n旧内容');
+
+    const workflow = env.store.saveWorkflow({
+      id: '',
+      projectId: env.project.id,
+      name: 'chapter-content-sync-workflow',
+      description: 'ensure chapter content sync',
+      steps: [
+        { id: '', order: 0, agentId: env.agent1.id, enabled: true, config: { primaryOutput: true } },
+        { id: '', order: 1, agentId: env.agent2.id, enabled: true },
+        { id: '', order: 2, agentId: env.agent1.id, enabled: true },
+      ],
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(makeMockProvider(['主正文', '中间改写', '{"entities":[]}'])),
+      new ContextBuilder(env.store),
+    );
+
+    await runtime.run(workflow.id, { instructions: 'write chapter' }, chapter.id);
+
+    expect(env.store.getChapterContent(chapter.id)).toBe('主正文');
+  });
+
+  it('marks execution as failed when chapter content persistence fails', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const chapter = env.store.saveChapter({
+      projectId: env.project.id,
+      number: 1,
+      title: '第一章',
+      status: 'drafting',
+      contentPath: 'chapters/001.md',
+    });
+
+    const workflow = env.store.saveWorkflow({
+      id: '',
+      projectId: env.project.id,
+      name: 'chapter-content-failure-workflow',
+      description: 'ensure chapter content write failure marks execution failed',
+      steps: [
+        { id: '', order: 0, agentId: env.agent1.id, enabled: true, config: { primaryOutput: true } },
+      ],
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    const saveSpy = vi.spyOn(env.store, 'saveChapterContent').mockImplementation(() => {
+      throw new Error('disk full');
+    });
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(makeMockProvider(['正文输出'])),
+      new ContextBuilder(env.store),
+    );
+
+    await runtime.run(workflow.id, {}, chapter.id);
+
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+    const executions = env.store.getExecutions(env.project.id);
+    expect(executions).toHaveLength(1);
+    expect(executions[0].status).toBe('failed');
   });
 
   it('fails current step when rendered template still has unresolved placeholders', async () => {

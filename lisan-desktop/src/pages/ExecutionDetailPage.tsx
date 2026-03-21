@@ -70,6 +70,12 @@ function applyEventToSteps(steps: StepViewModel[], event: WorkflowNotification):
       status: "failed",
       runtimeError: typeof params.error === "string" ? params.error : "未知错误",
     };
+  } else if (event.method === "step:skipped") {
+    next = {
+      ...base,
+      status: "skipped",
+      runtimeError: undefined,
+    };
   } else if (event.method === "step:progress") {
     const chunk = typeof params.chunk === "string" ? params.chunk : "";
     next = {
@@ -103,6 +109,8 @@ export default function ExecutionDetailPage() {
   const [pausing, setPausing] = useState(false);
   const [aborting, setAborting] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
+  const [skipPendingStepId, setSkipPendingStepId] = useState<string | null>(null);
+  const [controlFeedback, setControlFeedback] = useState<string | null>(null);
 
   const loadDetail = async () => {
     if (!execId) {
@@ -146,6 +154,42 @@ export default function ExecutionDetailPage() {
     setSteps((current) => applyEventToSteps(current, latestEvent));
   }, [latestEvent, execId]);
 
+  useEffect(() => {
+    if (!latestEvent) {
+      return;
+    }
+    const eventExecutionId =
+      typeof latestEvent.params?.executionId === "string" ? latestEvent.params.executionId : undefined;
+    if (!execId || eventExecutionId !== execId) {
+      return;
+    }
+
+    if (latestEvent.method === "step:skipped") {
+      const skippedStepId =
+        typeof latestEvent.params?.stepId === "string" ? latestEvent.params.stepId : undefined;
+      if (skippedStepId && skippedStepId === skipPendingStepId) {
+        setSkipPendingStepId(null);
+        setControlFeedback("当前步骤已跳过。");
+      }
+      return;
+    }
+
+    if (latestEvent.method === "step:complete") {
+      const completedStepId =
+        typeof latestEvent.params?.stepId === "string" ? latestEvent.params.stepId : undefined;
+      if (completedStepId && completedStepId === skipPendingStepId) {
+        setSkipPendingStepId(null);
+        setControlFeedback("当前步骤已完成，跳过请求未生效。");
+      }
+      return;
+    }
+
+    if (latestEvent.method === "workflow:complete" && aborting) {
+      setAborting(false);
+      setControlFeedback("执行已终止。");
+    }
+  }, [latestEvent, execId, skipPendingStepId, aborting]);
+
   const workflowNameMap = useMemo(
     () =>
       Object.fromEntries(workflows.map((workflow) => [workflow.id, workflow.name])) as Record<
@@ -183,15 +227,23 @@ export default function ExecutionDetailPage() {
         setIsPaused(false);
       } else if (action === "abort") {
         setAborting(true);
+        setControlFeedback("正在中断当前步骤...");
         await sidecar.workflowAbort(execId);
       } else if (action === "skip" && activeStep) {
+        setSkipPendingStepId(activeStep.stepId);
+        setControlFeedback("正在跳过当前步骤...");
         await sidecar.workflowSkip(execId, activeStep.stepId);
       }
     } catch (reason: unknown) {
+      if (action === "abort") {
+        setAborting(false);
+      }
+      if (action === "skip") {
+        setSkipPendingStepId(null);
+      }
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setPausing(false);
-      setAborting(false);
     }
   };
 
@@ -232,11 +284,15 @@ export default function ExecutionDetailPage() {
           <Button variant="outline" onClick={() => runControl(isPaused ? "resume" : "pause")} disabled={pausing}>
             {isPaused ? "恢复" : "暂停"}
           </Button>
-          <Button variant="outline" onClick={() => runControl("skip")} disabled={!activeStep}>
-            跳过当前步骤
+          <Button
+            variant="outline"
+            onClick={() => runControl("skip")}
+            disabled={!activeStep || Boolean(skipPendingStepId) || aborting}
+          >
+            {skipPendingStepId ? "正在跳过..." : "跳过当前步骤"}
           </Button>
           <Button variant="destructive" onClick={() => runControl("abort")} disabled={aborting}>
-            终止
+            {aborting ? "正在中断..." : "终止"}
           </Button>
           <Button variant="outline" onClick={() => void loadDetail()}>
             刷新
@@ -247,6 +303,12 @@ export default function ExecutionDetailPage() {
       {error && (
         <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
+        </div>
+      )}
+
+      {controlFeedback && !error && (
+        <div className="rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-sm text-muted-foreground">
+          {controlFeedback}
         </div>
       )}
 

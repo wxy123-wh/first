@@ -1,4 +1,4 @@
-import type { AgentDefinition, WorkflowDefinition, WorkflowKind, WorkflowStep } from '../types.js';
+import type { AgentDefinition, StepConfigOverride, WorkflowDefinition, WorkflowKind, WorkflowStep } from '../types.js';
 import type { StoreManager } from '../store/store-manager.js';
 
 const SCENE_NAME_HINT = /场景|拆解|decompose/i;
@@ -49,6 +49,7 @@ export function inferWorkflowKind(
 function buildStepsByNames(
   agentNameOrder: string[],
   agentIdByName: Record<string, string>,
+  configByAgentName?: Record<string, StepConfigOverride>,
 ): WorkflowStep[] {
   const steps: WorkflowStep[] = [];
   for (const agentName of agentNameOrder) {
@@ -56,11 +57,13 @@ function buildStepsByNames(
     if (!agentId) {
       continue;
     }
+    const config = configByAgentName?.[agentName];
     steps.push({
       id: '',
       order: steps.length,
       agentId,
       enabled: true,
+      config: config ? { ...config } : undefined,
     });
   }
   return steps;
@@ -100,6 +103,9 @@ function createDefaultChapterWorkflow(projectId: string, agents: AgentDefinition
       'Data Agent',
     ],
     agentIdByName,
+    {
+      '终审 Agent': { primaryOutput: true },
+    },
   );
   if (steps.length === 0) {
     return null;

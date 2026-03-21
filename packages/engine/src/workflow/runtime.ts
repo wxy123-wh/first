@@ -22,6 +22,9 @@ interface ExecutionControlState {
   aborted: boolean;
   pauseResolver: (() => void) | null;
   skippedSteps: Set<string>;
+  currentStepId: string | null;
+  currentStepController: AbortController | null;
+  interruption: { type: 'abort' | 'skip'; stepId: string } | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -77,6 +80,14 @@ function tryParseJson(text: string): unknown | null {
   } catch {
     return null;
   }
+}
+
+function isStructuredJsonPayload(text: string): boolean {
+  const parsed = tryParseJson(text);
+  if (parsed === null) {
+    return false;
+  }
+  return typeof parsed === 'object';
 }
 
 function extractSceneList(parsed: unknown): unknown[] {
@@ -174,6 +185,9 @@ export class WorkflowRuntime {
       aborted: false,
       pauseResolver: null,
       skippedSteps: new Set<string>(),
+      currentStepId: null,
+      currentStepController: null,
+      interruption: null,
     };
     this.executionControls.set(executionId, control);
     return control;
@@ -189,6 +203,16 @@ export class WorkflowRuntime {
 
   private clearExecutionControl(executionId: string): void {
     this.executionControls.delete(executionId);
+  }
+
+  private isAbortError(error: unknown): boolean {
+    if (!(error instanceof Error)) {
+      return false;
+    }
+    return (
+      error.name === 'AbortError' ||
+      /abort|aborted|cancelled|canceled|terminated|interrupted/i.test(error.message)
+    );
   }
 
   private resolveModelForProvider(providerId: string, fallbackModel: string): string {
@@ -332,7 +356,7 @@ export class WorkflowRuntime {
     chapterId: string | undefined,
     sourceOutline: string,
     stepOutputs: Record<string, string>,
-  ): number {
+  ): { savedCount: number; unboundCount: number; fallbackBoundCount: number } {
     const outputCandidates = Object.values(stepOutputs);
     const existing = this.store.getScenes(workflow.projectId);
     const dedupe = new Set(
@@ -340,6 +364,8 @@ export class WorkflowRuntime {
     );
     let nextOrder = existing.reduce((maxOrder, scene) => Math.max(maxOrder, scene.order), -1) + 1;
     let savedCount = 0;
+    let unboundCount = 0;
+    let fallbackBoundCount = 0;
 
     for (const output of outputCandidates) {
       const parsed = tryParseJson(output);
@@ -353,7 +379,9 @@ export class WorkflowRuntime {
         if (!scene) {
           continue;
         }
-        const targetChapterId = scene.chapterId ?? chapterId;
+        const hasSceneChapterId = typeof scene.chapterId === 'string' && scene.chapterId.trim().length > 0;
+        const targetChapterId = hasSceneChapterId ? scene.chapterId : chapterId;
+        const usedFallbackChapterBinding = !hasSceneChapterId && typeof chapterId === 'string' && chapterId.length > 0;
         const dedupeKey = sceneDedupeKey(scene.title, targetChapterId, scene.eventSkeleton);
         if (dedupe.has(dedupeKey)) {
           continue;
@@ -373,10 +401,54 @@ export class WorkflowRuntime {
         dedupe.add(dedupeKey);
         nextOrder += 1;
         savedCount += 1;
+        if (!targetChapterId) {
+          unboundCount += 1;
+        }
+        if (usedFallbackChapterBinding) {
+          fallbackBoundCount += 1;
+        }
       }
     }
 
-    return savedCount;
+    return { savedCount, unboundCount, fallbackBoundCount };
+  }
+
+  private pickChapterPrimaryOutput(
+    enabledSteps: WorkflowDefinition['steps'],
+    stepOutputs: Record<string, string>,
+  ): string | null {
+    const configuredPrimary = enabledSteps.filter((step) => step.config?.primaryOutput === true);
+    for (let i = configuredPrimary.length - 1; i >= 0; i--) {
+      const output = stepOutputs[configuredPrimary[i].id];
+      if (typeof output === 'string' && output.trim().length > 0) {
+        return output.trim();
+      }
+    }
+
+    for (let i = enabledSteps.length - 1; i >= 0; i--) {
+      const output = stepOutputs[enabledSteps[i].id];
+      if (typeof output !== 'string') {
+        continue;
+      }
+      const trimmed = output.trim();
+      if (!trimmed || isStructuredJsonPayload(trimmed)) {
+        continue;
+      }
+      return trimmed;
+    }
+
+    for (let i = enabledSteps.length - 1; i >= 0; i--) {
+      const output = stepOutputs[enabledSteps[i].id];
+      if (typeof output !== 'string') {
+        continue;
+      }
+      const trimmed = output.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+
+    return null;
   }
 
   async run(workflowId: string, globalContext: Record<string, unknown>, chapterId?: string): Promise<void> {
@@ -420,6 +492,14 @@ export class WorkflowRuntime {
 
         // Check if step is marked for skip
         if (control.skippedSteps.has(step.id)) {
+          control.skippedSteps.delete(step.id);
+          this.emit({
+            type: 'step:skipped',
+            executionId: execution.id,
+            stepId: step.id,
+            agentId: step.agentId,
+            reason: 'pre-marked',
+          });
           this.store.saveExecutionStep({
             executionId: execution.id,
             stepId: step.id,
@@ -430,6 +510,9 @@ export class WorkflowRuntime {
           continue;
         }
 
+        control.currentStepId = step.id;
+        control.currentStepController = new AbortController();
+        control.interruption = null;
         this.emit({ type: 'step:start', executionId: execution.id, stepId: step.id, agentId: step.agentId });
 
         // Load agent definition
@@ -477,6 +560,7 @@ export class WorkflowRuntime {
             model,
             temperature,
             maxTokens,
+            signal: control.currentStepController.signal,
           });
 
           stepOutputs[step.id] = result.text;
@@ -502,6 +586,49 @@ export class WorkflowRuntime {
             order: i,
           });
         } catch (err) {
+          const interruption = control.interruption;
+          if (interruption?.stepId === step.id && interruption.type === 'skip') {
+            control.skippedSteps.delete(step.id);
+            this.emit({
+              type: 'step:skipped',
+              executionId: execution.id,
+              stepId: step.id,
+              agentId: step.agentId,
+              reason: 'running-step',
+            });
+            this.store.saveExecutionStep({
+              executionId: execution.id,
+              stepId: step.id,
+              agentId: step.agentId,
+              status: 'skipped',
+              order: i,
+            });
+            continue;
+          }
+
+          if (
+            (interruption?.stepId === step.id && interruption.type === 'abort') ||
+            (control.aborted && this.isAbortError(err))
+          ) {
+            const abortedMessage = '执行已终止：当前步骤已中断。';
+            this.emit({
+              type: 'step:failed',
+              executionId: execution.id,
+              stepId: step.id,
+              error: abortedMessage,
+            });
+            this.store.saveExecutionStep({
+              executionId: execution.id,
+              stepId: step.id,
+              agentId: step.agentId,
+              status: 'failed',
+              input: agent.promptTemplate,
+              output: abortedMessage,
+              order: i,
+            });
+            break;
+          }
+
           const error = err instanceof Error ? err.message : String(err);
           this.emit({ type: 'step:failed', executionId: execution.id, stepId: step.id, error });
           this.store.saveExecutionStep({
@@ -516,19 +643,46 @@ export class WorkflowRuntime {
           // Mark execution as failed
           this.store.saveExecution({ ...execution, status: 'failed', completedAt: new Date().toISOString() });
           return;
+        } finally {
+          if (control.currentStepId === step.id) {
+            control.currentStepId = null;
+            control.currentStepController = null;
+          }
+          if (control.interruption?.stepId === step.id) {
+            control.interruption = null;
+          }
         }
       }
 
-      const finalStatus = control.aborted ? 'failed' : 'completed';
+      let finalStatus: 'failed' | 'completed' = control.aborted ? 'failed' : 'completed';
       let persistedScenes = 0;
+      let persistedUnboundScenes = 0;
+      let persistedFallbackBoundScenes = 0;
+      let chapterContentPersistMessage = '';
       const sourceOutline = resolvedGlobalContext.sourceOutline;
       if (finalStatus === 'completed') {
-        persistedScenes = this.persistScenesFromOutputs(
+        const scenePersistResult = this.persistScenesFromOutputs(
           workflow,
           chapterId,
           typeof sourceOutline === 'string' ? sourceOutline.trim() : '',
           stepOutputs,
         );
+        persistedScenes = scenePersistResult.savedCount;
+        persistedUnboundScenes = scenePersistResult.unboundCount;
+        persistedFallbackBoundScenes = scenePersistResult.fallbackBoundCount;
+        if (chapterId) {
+          const chapterOutput = this.pickChapterPrimaryOutput(enabledSteps, stepOutputs);
+          if (chapterOutput) {
+            try {
+              this.store.saveChapterContent(chapterId, chapterOutput);
+              chapterContentPersistMessage = ' 章节正文已回写。';
+            } catch (err) {
+              const reason = err instanceof Error ? err.message : String(err);
+              finalStatus = 'failed';
+              chapterContentPersistMessage = ` 章节正文回写失败：${reason}`;
+            }
+          }
+        }
       }
       this.store.saveExecution({ ...execution, status: finalStatus, completedAt: new Date().toISOString() });
 
@@ -536,7 +690,7 @@ export class WorkflowRuntime {
         type: 'workflow:complete',
         executionId: execution.id,
         chapterId,
-        summary: `Workflow ${finalStatus}. ${Object.keys(stepOutputs).length} steps produced output. 已保存 ${persistedScenes} 条场景。`,
+        summary: `Workflow ${finalStatus}. ${Object.keys(stepOutputs).length} steps produced output. 已保存 ${persistedScenes} 条场景。${persistedFallbackBoundScenes > 0 ? ` 其中 ${persistedFallbackBoundScenes} 条场景缺失 chapterId，已按入口章节兜底绑定。` : ''}${persistedUnboundScenes > 0 ? ` 其中 ${persistedUnboundScenes} 条未绑定章节，请尽快修复。` : ''}${chapterContentPersistMessage}`,
       });
     } finally {
       if (executionId) {
@@ -562,6 +716,10 @@ export class WorkflowRuntime {
   abort(executionId: string): void {
     const control = this.getExecutionControl(executionId);
     control.aborted = true;
+    if (control.currentStepId && control.currentStepController && !control.currentStepController.signal.aborted) {
+      control.interruption = { type: 'abort', stepId: control.currentStepId };
+      control.currentStepController.abort();
+    }
     // Also resume if paused, so the loop can exit
     this.resume(executionId);
   }
@@ -569,6 +727,14 @@ export class WorkflowRuntime {
   skip(executionId: string, stepId: string): void {
     const control = this.getExecutionControl(executionId);
     control.skippedSteps.add(stepId);
+    if (
+      control.currentStepId === stepId &&
+      control.currentStepController &&
+      !control.currentStepController.signal.aborted
+    ) {
+      control.interruption = { type: 'skip', stepId };
+      control.currentStepController.abort();
+    }
   }
 
   async rerun(executionId: string, fromStepId: string): Promise<void> {
