@@ -82,7 +82,7 @@ describe('P2 e2e smoke', () => {
       description: 'p2 smoke flow',
       steps: [
         { id: '', order: 0, agentId: builtinAgents[0].id, enabled: true },
-        { id: '', order: 1, agentId: builtinAgents[1].id, enabled: true },
+        { id: '', order: 1, agentId: builtinAgents[1].id, enabled: true, config: { primaryOutput: true } },
       ],
       createdAt: '',
       updatedAt: '',
@@ -106,6 +106,7 @@ describe('P2 e2e smoke', () => {
     const detail = engine.store.getExecutionDetail(executions[0].id);
     expect(detail.steps).toHaveLength(2);
     expect(detail.steps.every((step) => step.status === 'completed')).toBe(true);
+    expect(engine.store.getChapterContent(chapter.id)).toBe('检查通过');
 
     const scenes = engine.store.getScenes(project.id);
     expect(scenes).toHaveLength(1);

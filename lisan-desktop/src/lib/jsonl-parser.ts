@@ -54,7 +54,7 @@ export function parseExecutionTrace(jsonlContent: string): ExecutionDetail {
     }
     
     if (entry.event === 'agent_error' && currentAgent && currentStage) {
-      currentAgent.status = 'error';
+      currentAgent.status = 'failed';
       currentAgent.error = entry.data?.error as string;
       currentStage.agents.push(currentAgent);
       currentAgent = null;
@@ -67,7 +67,7 @@ export function parseExecutionTrace(jsonlContent: string): ExecutionDetail {
     }
     
     if (entry.event === 'stage_error' && currentStage) {
-      currentStage.status = 'error';
+      currentStage.status = 'failed';
       currentStage.endTime = entry.timestamp;
     }
   }
@@ -87,7 +87,7 @@ export function parseExecutionTrace(jsonlContent: string): ExecutionDetail {
       timestamp: firstEntry.timestamp,
       pipelineType: (firstEntry.data?.pipeline as any) || 'write',
       chapterNumber: firstEntry.data?.chapter as number,
-      status: entries[entries.length - 1].level === 'error' ? 'error' : 'completed'
+      status: entries[entries.length - 1].level === 'error' ? 'failed' : 'completed'
     },
     stages
   };

@@ -6,9 +6,9 @@ use commands::{
     agent_delete, agent_get_md, agent_list, agent_save, agent_save_md, chapter_create,
     chapter_get_content, chapter_list, chapter_save, chapter_save_content, create_project,
     delete_project, execution_detail, execution_list, list_projects, outline_get, outline_save,
-    project_get, project_open, project_update, provider_delete, provider_list, provider_save, scene_delete,
-    scene_list, scene_reorder, scene_save, workflow_abort, workflow_list, workflow_pause,
-    workflow_rerun, workflow_resume, workflow_run, workflow_save, workflow_skip,
+    project_get, project_open, project_update, provider_delete, provider_list, provider_save,
+    scene_delete, scene_list, scene_reorder, scene_save, workflow_abort, workflow_list,
+    workflow_pause, workflow_rerun, workflow_resume, workflow_run, workflow_save, workflow_skip,
 };
 use state::AppState;
 use std::path::PathBuf;

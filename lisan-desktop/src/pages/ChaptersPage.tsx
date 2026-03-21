@@ -1,6 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { useNavigate, useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,14 +36,15 @@ function buildDefaultChapterContent(chapter: Pick<Chapter, "number" | "title">):
 
 export default function ChaptersPage() {
   const sidecar = useSidecar();
-  const navigate = useNavigate();
-  const { id: routeProjectId } = useParams<{ id: string }>();
   const currentProject = useAppStore((state) => state.currentProject);
+  const workflowEvents = useAppStore((state) => state.workflowEvents);
 
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [switchingWorkflow, setSwitchingWorkflow] = useState(false);
   const [running, setRunning] = useState(false);
+  const [activeExecutionId, setActiveExecutionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
@@ -56,6 +56,21 @@ export default function ChaptersPage() {
   const selectedChapter = useMemo(
     () => chapters.find((chapter) => chapter.id === selectedChapterId) ?? null,
     [chapters, selectedChapterId],
+  );
+  const latestWorkflowEvent = workflowEvents[workflowEvents.length - 1];
+
+  const refreshChapterContent = useCallback(
+    async (chapterId: string, silent = false) => {
+      try {
+        const chapterContent = await sidecar.chapterGetContent(chapterId);
+        setContent(chapterContent);
+      } catch (reason: unknown) {
+        if (!silent) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
+      }
+    },
+    [sidecar],
   );
 
   const saveChapter = async (chapter: ChapterSaveInput): Promise<Chapter> => {
@@ -118,7 +133,7 @@ export default function ChaptersPage() {
       return;
     }
     let cancelled = false;
-    sidecar
+    void sidecar
       .chapterGetContent(selectedChapterId)
       .then((chapterContent) => {
         if (!cancelled) {
@@ -135,6 +150,62 @@ export default function ChaptersPage() {
       cancelled = true;
     };
   }, [selectedChapterId, sidecar]);
+
+  useEffect(() => {
+    if (!latestWorkflowEvent) {
+      return;
+    }
+
+    const params = latestWorkflowEvent.params ?? {};
+    const eventExecutionId = typeof params.executionId === "string" ? params.executionId : null;
+    if (latestWorkflowEvent.method === "workflow:start") {
+      const eventChapterId = typeof params.chapterId === "string" ? params.chapterId : null;
+      const eventWorkflowId = typeof params.workflowId === "string" ? params.workflowId : null;
+      if (
+        running &&
+        eventExecutionId &&
+        selectedChapterId &&
+        eventChapterId === selectedChapterId &&
+        eventWorkflowId === selectedWorkflowId
+      ) {
+        setActiveExecutionId(eventExecutionId);
+      }
+      return;
+    }
+
+    if (latestWorkflowEvent.method !== "workflow:complete") {
+      return;
+    }
+    if (!eventExecutionId) {
+      return;
+    }
+    if (activeExecutionId && eventExecutionId !== activeExecutionId) {
+      return;
+    }
+    if (!running && !activeExecutionId) {
+      return;
+    }
+    if (running || activeExecutionId) {
+      setRunning(false);
+      setActiveExecutionId(null);
+    }
+    const summary = typeof params.summary === "string" ? params.summary : "工作流执行完成。";
+    if (summary.includes("Workflow failed")) {
+      setError(summary);
+      return;
+    }
+    setNotice(summary);
+    if (selectedChapterId) {
+      void refreshChapterContent(selectedChapterId, true);
+    }
+  }, [
+    activeExecutionId,
+    latestWorkflowEvent,
+    refreshChapterContent,
+    running,
+    selectedChapterId,
+    selectedWorkflowId,
+  ]);
 
   const createChapter = async (firstChapter: boolean) => {
     if (!currentProject?.id) {
@@ -194,6 +265,52 @@ export default function ChaptersPage() {
     }
   };
 
+  const handleWorkflowChange = async (value: string | null) => {
+    const nextWorkflowId = value ?? "";
+    if (!selectedChapterId || !selectedChapter) {
+      setSelectedWorkflowId(nextWorkflowId);
+      return;
+    }
+    if (nextWorkflowId === (selectedChapter.workflowId ?? "")) {
+      setSelectedWorkflowId(nextWorkflowId);
+      return;
+    }
+
+    const previousWorkflowId = selectedWorkflowId;
+    setSelectedWorkflowId(nextWorkflowId);
+    setError(null);
+    setNotice(null);
+    setSwitchingWorkflow(true);
+    try {
+      const saved = await saveChapter({
+        id: selectedChapter.id,
+        projectId: selectedChapter.projectId,
+        number: selectedChapter.number,
+        title: selectedChapter.title,
+        status: selectedChapter.status,
+        workflowId: nextWorkflowId || undefined,
+        contentPath: selectedChapter.contentPath,
+        createdAt: selectedChapter.createdAt,
+        updatedAt: selectedChapter.updatedAt,
+      });
+      setChapters((previous) =>
+        previous.map((chapter) => (chapter.id === saved.id ? saved : chapter)),
+      );
+      setSelectedWorkflowId(saved.workflowId ?? nextWorkflowId);
+      setNotice("章节工作流已保存。");
+    } catch (reason: unknown) {
+      setSelectedWorkflowId(previousWorkflowId);
+      const message = reason instanceof Error ? reason.message : String(reason);
+      if (message.includes("Method not found") && (message.includes("chapter_save") || message.includes("chapter.save"))) {
+        setError(`${message}。请更新 sidecar API 后重试。`);
+      } else {
+        setError(`工作流切换保存失败：${message}`);
+      }
+    } finally {
+      setSwitchingWorkflow(false);
+    }
+  };
+
   const runWorkflow = async () => {
     if (!selectedChapterId || !selectedWorkflowId) {
       setError("请先选择章节和工作流。");
@@ -208,13 +325,9 @@ export default function ChaptersPage() {
         workflowId: selectedWorkflowId,
         chapterId: selectedChapterId,
       });
-      setNotice("工作流已启动，正在跳转到执行页。");
-      if (routeProjectId) {
-        navigate(`/projects/${routeProjectId}/executions`);
-      }
+      setNotice("工作流已启动，等待执行完成后自动回写正文。");
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
       setRunning(false);
     }
   };
@@ -291,7 +404,10 @@ export default function ChaptersPage() {
           <div className="flex flex-wrap items-center gap-2">
             <Select
               value={selectedWorkflowId}
-              onValueChange={(value) => setSelectedWorkflowId(value ?? "")}
+              onValueChange={(value) => {
+                void handleWorkflowChange(value);
+              }}
+              disabled={!selectedChapterId || switchingWorkflow}
             >
               <SelectTrigger className="w-48">
                 <SelectValue placeholder="选择工作流" />
@@ -307,7 +423,10 @@ export default function ChaptersPage() {
             <Button variant="outline" onClick={saveContent} disabled={!selectedChapterId || saving}>
               {saving ? "保存中..." : "保存"}
             </Button>
-            <Button onClick={runWorkflow} disabled={!selectedChapterId || !selectedWorkflowId || running}>
+            <Button
+              onClick={runWorkflow}
+              disabled={!selectedChapterId || !selectedWorkflowId || running || switchingWorkflow}
+            >
               {running ? "运行中..." : "运行"}
             </Button>
           </div>

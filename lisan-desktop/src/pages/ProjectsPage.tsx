@@ -13,6 +13,20 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/api";
 import type { Project } from "@/types/lisan";
 
+const PROJECT_STATUS_LABEL: Record<Project["status"], string> = {
+  idle: "空闲",
+  running: "运行中",
+  completed: "已完成",
+  failed: "失败",
+};
+
+const PROJECT_STATUS_VARIANT: Record<Project["status"], "default" | "secondary" | "destructive"> = {
+  idle: "secondary",
+  running: "default",
+  completed: "default",
+  failed: "destructive",
+};
+
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -101,11 +115,9 @@ export default function ProjectsPage() {
                     </CardTitle>
                   </Link>
                   <Badge
-                    variant={
-                      project.status === "completed" ? "default" : "secondary"
-                    }
+                    variant={PROJECT_STATUS_VARIANT[project.status]}
                   >
-                    {project.status}
+                    {PROJECT_STATUS_LABEL[project.status]}
                   </Badge>
                 </div>
                 <CardDescription>

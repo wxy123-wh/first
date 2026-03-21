@@ -51,6 +51,7 @@ export interface StepConfigOverride {
   maxTokens?: number;
   model?: string;
   provider?: string;
+  primaryOutput?: boolean;
 }
 
 export interface AgentDefinition {

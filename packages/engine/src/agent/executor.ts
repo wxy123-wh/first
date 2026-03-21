@@ -10,6 +10,7 @@ export interface ExecuteOptions {
   model: string;
   temperature?: number;
   maxTokens?: number;
+  signal?: AbortSignal;
 }
 
 export interface ExecuteResult {
@@ -144,6 +145,7 @@ export class AgentExecutor {
       ],
       temperature: opts.temperature,
       maxTokens: opts.maxTokens,
+      signal: opts.signal,
     });
     return {
       text: result.text,

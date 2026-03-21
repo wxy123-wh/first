@@ -160,6 +160,10 @@ export default function NewProjectPage() {
               </div>
             </div>
 
+            <p className="text-sm text-muted-foreground">
+              创建后会自动把上述模型应用到项目 Provider 默认配置。API Key 可在 Provider 页面补充，或通过环境变量注入。
+            </p>
+
             <div className="flex gap-4">
               <Button
                 type="submit"

@@ -1,11 +1,14 @@
 import { Link, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAppStore } from "@/lib/store";
+import { getRagSyncState } from "@/lib/rag-sync-state";
 
 export default function RagSyncPage() {
   const { id: routeProjectId } = useParams<{ id: string }>();
   const currentProject = useAppStore((state) => state.currentProject);
+  const ragSyncState = getRagSyncState();
 
   return (
     <div className="space-y-4">
@@ -21,17 +24,21 @@ export default function RagSyncPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>同步入口已接入</CardTitle>
-          <CardDescription>
-            此页面为设置页中的 RAG 同步入口对应路由（`/projects/:id/settings/rag-sync`）。
-          </CardDescription>
+          <div className="flex items-center gap-2">
+            <CardTitle>RAG 同步</CardTitle>
+            <Badge variant="secondary">{ragSyncState.title}</Badge>
+          </div>
+          <CardDescription>{ragSyncState.reason}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-3 text-sm text-muted-foreground">
           <p>当前项目：{currentProject?.name ?? routeProjectId ?? "未识别项目"}</p>
-          <p>桌面端当前以 sidecar 为主数据面。RAG 同步执行链路会在后续迭代收敛到统一入口。</p>
+          <p>当前版本仅保留状态说明，暂不提供可执行同步按钮，避免出现“可点击但无效果”的误导。</p>
+          <Button variant="outline" disabled>
+            {ragSyncState.actionLabel}
+          </Button>
           {routeProjectId && (
             <Link to={`/projects/${routeProjectId}/executions`}>
-              <Button variant="outline">查看执行列表</Button>
+              <Button variant="ghost">查看执行列表</Button>
             </Link>
           )}
         </CardContent>

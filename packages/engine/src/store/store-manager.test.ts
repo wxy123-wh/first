@@ -136,6 +136,35 @@ describe('StoreManager — Agents', () => {
 });
 
 describe('StoreManager — Providers', () => {
+  it('bootstraps provider models from lisan.config.yaml llm section on startup', () => {
+    store.close();
+    writeFileSync(
+      join(testDir, 'lisan.config.yaml'),
+      [
+        'version: "1"',
+        'book:',
+        '  id: "test"',
+        '  title: "test"',
+        '  plugin: "webnovel"',
+        'llm:',
+        '  orchestrator:',
+        '    provider: anthropic',
+        '    model: claude-sonnet-4-5',
+        '    temperature: 0.6',
+        '  worker:',
+        '    provider: openai',
+        '    model: gpt-4.1-mini',
+        '    temperature: 0.8',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    store = new StoreManager(testDir);
+
+    expect(store.getProvider('anthropic')?.model).toBe('claude-sonnet-4-5');
+    expect(store.getProvider('openai')?.model).toBe('gpt-4.1-mini');
+  });
+
   it('seeds built-in providers and supports custom provider upsert', () => {
     const providers = store.getProviders();
     expect(providers.map((item) => item.id)).toEqual(

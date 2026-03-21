@@ -6,7 +6,7 @@ export interface Project {
   path: string;
   lastExecutionTime?: string;
   chapterCount: number;
-  status: 'idle' | 'running' | 'completed' | 'error';
+  status: 'idle' | 'running' | 'completed' | 'failed';
 }
 
 export interface Execution {
@@ -15,7 +15,7 @@ export interface Execution {
   timestamp: string;
   pipelineType: 'write' | 'rewrite' | 'plan' | 'decompose';
   chapterNumber?: number;
-  status: 'running' | 'completed' | 'error';
+  status: 'running' | 'completed' | 'failed';
   duration?: number;
 }
 
@@ -28,7 +28,7 @@ export interface ExecutionDetail {
 export interface PipelineStage {
   name: string;
   type: 'context' | 'draft' | 'pass' | 'review' | 'data';
-  status: 'pending' | 'running' | 'completed' | 'error';
+  status: 'pending' | 'running' | 'completed' | 'failed';
   startTime?: string;
   endTime?: string;
   agents: AgentExecution[];
@@ -46,7 +46,7 @@ export interface AgentExecution {
     tokens?: TokenStats;
   };
   duration: number;
-  status: 'completed' | 'error';
+  status: 'completed' | 'failed';
   error?: string;
 }
 

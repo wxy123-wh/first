@@ -30,11 +30,21 @@ function defaultModelForType(type: ProviderType): string {
 
 const CANONICAL_OUTLINE_RELATIVE_PATH = join('大纲', 'arc-1.md');
 const LEGACY_OUTLINE_RELATIVE_PATH = 'outline.md';
+const ROOT_CONFIG_RELATIVE_PATH = 'lisan.config.yaml';
+const LEGACY_CONFIG_RELATIVE_PATH = join('.lisan', 'config.yaml');
 
 const SCENE_NAME_HINT = /场景|拆解|decompose/i;
 const CHAPTER_NAME_HINT = /章节|写作|起草|改写|润色|生成|draft|rewrite|review/i;
 const SCENE_AGENT_HINT = /拆解|过渡|检验|decompose|transition|validation/i;
 const CHAPTER_AGENT_HINT = /context|起草|体验植入|爽点强化|节奏张力|对话博弈|anti-ai|终审|data/i;
+
+type LlmRole = 'orchestrator' | 'worker';
+
+interface ParsedProviderModelSelection {
+  role: LlmRole;
+  provider: ProviderType;
+  model: string;
+}
 
 export class StoreManager {
   private db: Database;
@@ -52,6 +62,7 @@ export class StoreManager {
     this.seedProviders();
     this.migrateLegacyProviderApiKeys();
     this.migrateLegacyOutlinePath();
+    this.bootstrapProvidersFromProjectConfig();
     this.backfillWorkflowKinds();
   }
 
@@ -118,6 +129,179 @@ export class StoreManager {
   }
 
   // === Providers ===
+
+  private normalizeYamlScalar(value: string): string {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return '';
+    }
+    const quote = trimmed[0];
+    if ((quote === '"' || quote === "'") && trimmed.endsWith(quote)) {
+      return trimmed.slice(1, -1).trim();
+    }
+    const commentIndex = trimmed.indexOf(' #');
+    return (commentIndex === -1 ? trimmed : trimmed.slice(0, commentIndex)).trim();
+  }
+
+  private normalizeProviderType(value: string): ProviderType | null {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'openai' || normalized === 'anthropic' || normalized === 'newapi') {
+      return normalized;
+    }
+    return null;
+  }
+
+  private readProjectConfigContent(): string | null {
+    const candidates = [ROOT_CONFIG_RELATIVE_PATH, LEGACY_CONFIG_RELATIVE_PATH];
+    for (const relativePath of candidates) {
+      const fullPath = join(this.basePath, relativePath);
+      if (!existsSync(fullPath)) {
+        continue;
+      }
+      try {
+        return readFileSync(fullPath, 'utf-8');
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  private parseLlmProviderSelections(configContent: string): ParsedProviderModelSelection[] {
+    const lines = configContent.split(/\r?\n/);
+    let inLlmSection = false;
+    let llmIndent = -1;
+    let currentRole: LlmRole | null = null;
+    let roleIndent = -1;
+    const parsedByRole: Partial<Record<LlmRole, Partial<Pick<ParsedProviderModelSelection, 'provider' | 'model'>>>> =
+      {};
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) {
+        continue;
+      }
+      const indent = line.length - line.trimStart().length;
+
+      if (!inLlmSection) {
+        if (trimmed === 'llm:' || trimmed.startsWith('llm:')) {
+          inLlmSection = true;
+          llmIndent = indent;
+          currentRole = null;
+          roleIndent = -1;
+        }
+        continue;
+      }
+
+      if (indent <= llmIndent) {
+        inLlmSection = false;
+        currentRole = null;
+        roleIndent = -1;
+        continue;
+      }
+
+      if (trimmed === 'orchestrator:' || trimmed.startsWith('orchestrator:')) {
+        currentRole = 'orchestrator';
+        roleIndent = indent;
+        parsedByRole[currentRole] ??= {};
+        continue;
+      }
+      if (trimmed === 'worker:' || trimmed.startsWith('worker:')) {
+        currentRole = 'worker';
+        roleIndent = indent;
+        parsedByRole[currentRole] ??= {};
+        continue;
+      }
+
+      if (!currentRole || indent <= roleIndent) {
+        continue;
+      }
+
+      const separatorIndex = trimmed.indexOf(':');
+      if (separatorIndex === -1) {
+        continue;
+      }
+      const key = trimmed.slice(0, separatorIndex).trim();
+      const value = this.normalizeYamlScalar(trimmed.slice(separatorIndex + 1));
+      if (!value) {
+        continue;
+      }
+
+      if (key === 'provider') {
+        const provider = this.normalizeProviderType(value);
+        if (provider) {
+          parsedByRole[currentRole] = {
+            ...parsedByRole[currentRole],
+            provider,
+          };
+        }
+      }
+      if (key === 'model') {
+        parsedByRole[currentRole] = {
+          ...parsedByRole[currentRole],
+          model: value,
+        };
+      }
+    }
+
+    return (['orchestrator', 'worker'] as const)
+      .map((role) => {
+        const parsed = parsedByRole[role];
+        if (!parsed?.provider || !parsed.model) {
+          return null;
+        }
+        return {
+          role,
+          provider: parsed.provider,
+          model: parsed.model,
+        } satisfies ParsedProviderModelSelection;
+      })
+      .filter((value): value is ParsedProviderModelSelection => Boolean(value));
+  }
+
+  private shouldBootstrapProvidersFromConfig(): boolean {
+    const agentRow = this.db.raw
+      .prepare('SELECT COUNT(1) AS total FROM agents')
+      .get() as { total: number } | undefined;
+    return (agentRow?.total ?? 0) === 0;
+  }
+
+  private bootstrapProvidersFromProjectConfig(): void {
+    if (!this.shouldBootstrapProvidersFromConfig()) {
+      return;
+    }
+
+    const configContent = this.readProjectConfigContent();
+    if (!configContent) {
+      return;
+    }
+
+    const selections = this.parseLlmProviderSelections(configContent);
+    if (selections.length === 0) {
+      return;
+    }
+
+    const modelByProvider = new Map<string, string>();
+    for (const selection of selections) {
+      // Preserve declaration order so worker can intentionally override orchestrator on shared provider ids.
+      modelByProvider.set(selection.provider, selection.model);
+    }
+
+    for (const [providerId, model] of modelByProvider) {
+      const provider = this.getProvider(providerId);
+      if (!provider) {
+        continue;
+      }
+      if (provider.model.trim() === model.trim()) {
+        continue;
+      }
+      this.saveProvider({
+        ...provider,
+        model: model.trim(),
+        apiKey: provider.apiKey,
+      });
+    }
+  }
 
   private seedProviders(): void {
     const now = new Date().toISOString();
