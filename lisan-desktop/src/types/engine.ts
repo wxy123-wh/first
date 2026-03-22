@@ -200,6 +200,12 @@ export interface RagSyncStartResult {
   status: RagSyncStatus;
 }
 
+export interface TruthFiles {
+  currentState: string;
+  pendingHooks: string;
+  characterMatrix: string;
+}
+
 export type AppTab =
   | "outline"
   | "scenes"

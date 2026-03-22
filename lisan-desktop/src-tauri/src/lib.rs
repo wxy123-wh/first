@@ -9,7 +9,8 @@ use commands::{
     project_get, project_open, project_update, provider_delete, provider_list, provider_save,
     rag_status, rag_sync, scene_delete, scene_list, scene_reorder, scene_save, setting_delete,
     setting_get, setting_list, setting_save, workflow_abort, workflow_list, workflow_pause,
-    workflow_rerun, workflow_resume, workflow_run, workflow_save, workflow_skip,
+    workflow_rerun, workflow_resume, workflow_run, workflow_save, workflow_skip, truth_read,
+    truth_update,
 };
 use state::AppState;
 use std::path::PathBuf;
@@ -70,6 +71,8 @@ pub fn run() {
             setting_delete,
             execution_list,
             execution_detail,
+            truth_read,
+            truth_update,
             rag_sync,
             rag_status,
         ])

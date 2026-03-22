@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import {
@@ -18,6 +19,9 @@ const RAG_CONFIG_FILES = [
 ] as const;
 const LEGACY_OUTLINE_FILE = 'outline.md';
 const CANONICAL_OUTLINE_FILE = join('大纲', 'arc-1.md');
+const RAG_CONTEXT_CACHE_FILE = join('.lisan', 'rag-context-cache.json');
+const RAG_CONTEXT_CONTENT_LIMIT = 4000;
+const RAG_CONTEXT_EXCERPT_LIMIT = 220;
 
 export { scanMarkdownFiles, inferDocumentType } from '@lisan/rag';
 
@@ -83,6 +87,21 @@ export interface RagSyncStartResult {
   status: RagSyncStatus;
 }
 
+interface RagContextCacheEntry {
+  source: string;
+  type: Document['metadata']['type'];
+  abstract: string;
+  content: string;
+}
+
+export interface RagContextReference {
+  source: string;
+  type: Document['metadata']['type'];
+  abstract: string;
+  excerpt: string;
+  score: number;
+}
+
 const INITIAL_STATUS: RagSyncStatus = {
   stage: 'idle',
   running: false,
@@ -110,6 +129,191 @@ function cloneStatus(status: RagSyncStatus): RagSyncStatus {
 
 function toPosix(pathValue: string): string {
   return pathValue.replace(/\\/g, '/');
+}
+
+function clipText(value: string, maxChars: number): string {
+  const normalized = value.replace(/\r\n/g, '\n').trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars)}...`;
+}
+
+function normalizeSearchText(value: string): string {
+  return value.toLocaleLowerCase();
+}
+
+function extractSearchTokens(query: string): string[] {
+  const normalized = normalizeSearchText(query);
+  const tokens = normalized.match(/[a-z0-9]{2,}|[\u4e00-\u9fff]{2,}/g) ?? [];
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const token of tokens) {
+    if (seen.has(token)) {
+      continue;
+    }
+    seen.add(token);
+    deduped.push(token);
+  }
+  return deduped;
+}
+
+function countOccurrences(haystack: string, needle: string): number {
+  if (!needle) {
+    return 0;
+  }
+  let count = 0;
+  let cursor = 0;
+  while (cursor < haystack.length) {
+    const index = haystack.indexOf(needle, cursor);
+    if (index < 0) {
+      break;
+    }
+    count += 1;
+    cursor = index + needle.length;
+  }
+  return count;
+}
+
+function buildExcerpt(content: string, token: string): string {
+  const normalizedContent = content.replace(/\r\n/g, '\n');
+  if (!normalizedContent) {
+    return '';
+  }
+  const normalizedToken = token.trim().toLocaleLowerCase();
+  if (!normalizedToken) {
+    return clipText(normalizedContent, RAG_CONTEXT_EXCERPT_LIMIT);
+  }
+
+  const lowerContent = normalizedContent.toLocaleLowerCase();
+  const index = lowerContent.indexOf(normalizedToken);
+  if (index < 0) {
+    return clipText(normalizedContent, RAG_CONTEXT_EXCERPT_LIMIT);
+  }
+  const start = Math.max(0, index - Math.floor(RAG_CONTEXT_EXCERPT_LIMIT / 2));
+  const end = Math.min(normalizedContent.length, start + RAG_CONTEXT_EXCERPT_LIMIT);
+  return clipText(normalizedContent.slice(start, end), RAG_CONTEXT_EXCERPT_LIMIT);
+}
+
+function cachePathForProject(projectRoot: string): string {
+  return join(projectRoot, RAG_CONTEXT_CACHE_FILE);
+}
+
+function parseRagContextCache(raw: string): RagContextCacheEntry[] {
+  const parsed = JSON.parse(raw) as unknown;
+  if (!Array.isArray(parsed)) {
+    return [];
+  }
+  const entries: RagContextCacheEntry[] = [];
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const source = typeof record.source === 'string' ? record.source.trim() : '';
+    const type = typeof record.type === 'string' ? record.type.trim() : '';
+    if (!source || !type) {
+      continue;
+    }
+    const abstract =
+      typeof record.abstract === 'string' ? clipText(record.abstract, 400) : '';
+    const content =
+      typeof record.content === 'string' ? clipText(record.content, RAG_CONTEXT_CONTENT_LIMIT) : '';
+    entries.push({
+      source,
+      type: type as Document['metadata']['type'],
+      abstract,
+      content,
+    });
+  }
+  return entries;
+}
+
+function readRagContextCache(projectRoot: string): RagContextCacheEntry[] {
+  const cachePath = cachePathForProject(projectRoot);
+  if (!existsSync(cachePath)) {
+    return [];
+  }
+  try {
+    const raw = readFileSync(cachePath, 'utf-8');
+    return parseRagContextCache(raw);
+  } catch {
+    return [];
+  }
+}
+
+function toCacheEntry(doc: Document): RagContextCacheEntry {
+  return {
+    source: doc.metadata.source,
+    type: doc.metadata.type,
+    abstract: clipText(doc.metadata.abstract ?? '', 400),
+    content: clipText(doc.content, RAG_CONTEXT_CONTENT_LIMIT),
+  };
+}
+
+async function writeRagContextCache(projectRoot: string, entries: RagContextCacheEntry[]): Promise<void> {
+  const cachePath = cachePathForProject(projectRoot);
+  const deduped = new Map<string, RagContextCacheEntry>();
+  for (const entry of entries) {
+    deduped.set(entry.source, entry);
+  }
+  const payload = JSON.stringify([...deduped.values()], null, 2);
+  await mkdir(join(projectRoot, '.lisan'), { recursive: true });
+  await writeFile(cachePath, payload, 'utf-8');
+}
+
+export function searchRagContext(projectRoot: string, query: string, topK = 4): RagContextReference[] {
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const entries = readRagContextCache(projectRoot);
+  if (entries.length === 0) {
+    return [];
+  }
+
+  const lowerQuery = normalizeSearchText(normalizedQuery);
+  const tokens = extractSearchTokens(normalizedQuery);
+
+  const scored = entries
+    .map((entry) => {
+      const haystack = normalizeSearchText(
+        `${entry.source}\n${entry.abstract}\n${entry.content}`,
+      );
+      let score = 0;
+      if (haystack.includes(lowerQuery)) {
+        score += 8;
+      }
+      for (const token of tokens) {
+        const occurrences = countOccurrences(haystack, token);
+        if (occurrences > 0) {
+          score += Math.min(occurrences, 3) * 2;
+        }
+      }
+      return {
+        entry,
+        score,
+      };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  const limit = Math.max(1, Math.floor(topK));
+  return scored.slice(0, limit).map(({ entry, score }) => {
+    const excerptToken = tokens.find((token) => {
+      const content = normalizeSearchText(entry.content);
+      return content.includes(token);
+    }) ?? '';
+    const abstract = entry.abstract || firstUsefulLine(entry.content);
+    return {
+      source: entry.source,
+      type: entry.type,
+      abstract,
+      excerpt: buildExcerpt(entry.content, excerptToken),
+      score,
+    };
+  });
 }
 
 function normalizeYamlScalar(value: string): string {
@@ -375,6 +579,11 @@ export class RagSyncService {
       this.status.stats.total = files.length;
 
       if (files.length === 0) {
+        try {
+          await writeRagContextCache(this.projectRoot, []);
+        } catch {
+          // Ignore cache write failures so sync status remains based on vector indexing.
+        }
         this.complete('completed', '未找到可同步的 Markdown 文件。');
         return;
       }
@@ -382,18 +591,20 @@ export class RagSyncService {
       const ragConfig = await loadRagConfig(this.projectRoot);
       const vectorStore = await this.vectorStoreFactory(this.projectRoot, ragConfig);
       this.status.stage = 'syncing';
+      const cachedEntries: RagContextCacheEntry[] = [];
 
       try {
         for (let i = 0; i < files.length; i += this.batchSize) {
           const batch = files.slice(i, i + this.batchSize);
           const docs: Document[] = [];
           const docSources: string[] = [];
+          const batchEntries: RagContextCacheEntry[] = [];
 
           for (const filePath of batch) {
             const source = toPosix(relative(this.projectRoot, filePath));
             try {
               const content = await readFile(filePath, 'utf-8');
-              docs.push({
+              const doc: Document = {
                 id: source,
                 content,
                 metadata: {
@@ -401,8 +612,10 @@ export class RagSyncService {
                   type: inferDocumentTypeFromRag(filePath, this.projectRoot),
                   abstract: firstUsefulLine(content),
                 },
-              });
+              };
+              docs.push(doc);
               docSources.push(source);
+              batchEntries.push(toCacheEntry(doc));
             } catch (error) {
               this.status.stats.processed += 1;
               this.addFailure(source, error instanceof Error ? error.message : String(error));
@@ -414,6 +627,7 @@ export class RagSyncService {
               await vectorStore.upsert(docs);
               this.status.stats.processed += docs.length;
               this.status.stats.succeeded += docs.length;
+              cachedEntries.push(...batchEntries);
             } catch (error) {
               const reason = error instanceof Error ? error.message : String(error);
               for (const source of docSources) {
@@ -428,6 +642,12 @@ export class RagSyncService {
             `同步中：${this.status.stats.processed}/${this.status.stats.total}`,
             currentFile,
           );
+        }
+
+        try {
+          await writeRagContextCache(this.projectRoot, cachedEntries);
+        } catch {
+          // Ignore cache write failures so successful vector sync still completes.
         }
       } finally {
         vectorStore.close();

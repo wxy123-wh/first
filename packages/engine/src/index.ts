@@ -29,7 +29,7 @@ export type {
 export { checkDraft } from './checker/post-write-checker.js';
 export type { CheckResult, CheckViolation } from './checker/post-write-checker.js';
 export { Engine } from './engine.js';
-export type { EngineOptions } from './engine.js';
+export type { EngineOptions, EngineTruthApi } from './engine.js';
 export {
   RagSyncService,
   scanMarkdownFiles,

@@ -6,6 +6,8 @@ use tauri::State;
 
 use crate::state::AppState;
 
+const PROJECT_REMOVED_MARKER: &str = ".lisan.removed";
+
 #[derive(Serialize, Deserialize, Debug)]
 pub struct Project {
     pub id: String,
@@ -52,6 +54,72 @@ fn table_exists(connection: &Connection, table_name: &str) -> bool {
         )
         .ok()
         .is_some_and(|count| count > 0)
+}
+
+fn project_has_supported_config(project_path: &Path) -> bool {
+    let lisan_dir = project_path.join(".lisan");
+    let has_legacy_config = lisan_dir.join("config.yaml").exists();
+    let has_current_config = project_path.join("lisan.config.yaml").exists();
+    has_legacy_config || has_current_config
+}
+
+fn should_include_project_in_list(project_path: &Path) -> bool {
+    if !project_has_supported_config(project_path) {
+        return false;
+    }
+    !project_path.join(PROJECT_REMOVED_MARKER).exists()
+}
+
+fn read_text_file_if_exists(path: &Path) -> Option<String> {
+    fs::read_to_string(path).ok()
+}
+
+fn ensure_project_exists(project_path: &Path) -> Result<(), String> {
+    if project_path.exists() && project_path.is_dir() {
+        return Ok(());
+    }
+    Err("项目不存在".to_string())
+}
+
+fn remove_runtime_directory(project_path: &Path) -> Result<(), String> {
+    let lisan_dir = project_path.join(".lisan");
+    if lisan_dir.exists() {
+        fs::remove_dir_all(lisan_dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn reset_project_runtime_data(project_path: &Path) -> Result<(), String> {
+    ensure_project_exists(project_path)?;
+
+    let root_config_path = project_path.join("lisan.config.yaml");
+    let legacy_config_path = project_path.join(".lisan").join("config.yaml");
+    let config_content = read_text_file_if_exists(&root_config_path)
+        .or_else(|| read_text_file_if_exists(&legacy_config_path));
+
+    remove_runtime_directory(project_path)?;
+
+    let lisan_dir = project_path.join(".lisan");
+    fs::create_dir_all(&lisan_dir).map_err(|e| e.to_string())?;
+
+    if let Some(content) = config_content {
+        fs::write(lisan_dir.join("config.yaml"), content).map_err(|e| e.to_string())?;
+    }
+
+    let removed_marker_path = project_path.join(PROJECT_REMOVED_MARKER);
+    if removed_marker_path.exists() {
+        fs::remove_file(removed_marker_path).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn remove_project_from_list(project_path: &Path) -> Result<(), String> {
+    // "从项目列表移除" 复用 "重置运行数据" 语义，再加上移除标记。
+    reset_project_runtime_data(project_path)?;
+    remove_runtime_directory(project_path)?;
+    fs::write(project_path.join(PROJECT_REMOVED_MARKER), "removed").map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn load_project_summary(project_path: &Path) -> ProjectSummary {
@@ -143,10 +211,7 @@ pub fn list_projects(state: State<'_, AppState>) -> Result<Vec<Project>, String>
         }
 
         let project_path = entry.path();
-        let lisan_dir = project_path.join(".lisan");
-        let has_legacy_config = lisan_dir.join("config.yaml").exists();
-        let has_current_config = project_path.join("lisan.config.yaml").exists();
-        if !has_legacy_config && !has_current_config {
+        if !should_include_project_in_list(&project_path) {
             continue;
         }
 
@@ -294,14 +359,8 @@ pipeline:
 
 #[tauri::command]
 pub fn delete_project(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let lisan_dir = state.workspace_root.join(&id).join(".lisan");
-
-    if !lisan_dir.exists() {
-        return Err("项目不存在".to_string());
-    }
-
-    fs::remove_dir_all(&lisan_dir).map_err(|e| e.to_string())?;
-    Ok(())
+    let project_path = state.workspace_root.join(&id);
+    remove_project_from_list(&project_path)
 }
 
 #[cfg(test)]
@@ -397,6 +456,49 @@ mod tests {
         assert_eq!(summary.chapter_count, 0);
         assert_eq!(summary.status, "idle");
         assert!(summary.last_execution_time.is_none());
+
+        fs::remove_dir_all(&project_dir).expect("cleanup test directory");
+    }
+
+    #[test]
+    fn reset_project_runtime_data_keeps_project_listed() {
+        let project_dir = unique_temp_project_dir("reset-runtime");
+        let lisan_dir = project_dir.join(".lisan");
+        fs::create_dir_all(&lisan_dir).expect("failed to create .lisan directory");
+        fs::write(project_dir.join("lisan.config.yaml"), "version: \"1\"\n")
+            .expect("write root config");
+        fs::write(lisan_dir.join("config.yaml"), "version: \"1\"\n").expect("write legacy config");
+        fs::write(lisan_dir.join("lisan.db"), "db").expect("write fake db");
+        fs::write(project_dir.join(PROJECT_REMOVED_MARKER), "removed")
+            .expect("write removed marker");
+
+        reset_project_runtime_data(&project_dir).expect("reset runtime data");
+
+        assert!(project_dir.join("lisan.config.yaml").exists());
+        assert!(project_dir.join(".lisan").exists());
+        assert!(project_dir.join(".lisan").join("config.yaml").exists());
+        assert!(!project_dir.join(".lisan").join("lisan.db").exists());
+        assert!(!project_dir.join(PROJECT_REMOVED_MARKER).exists());
+        assert!(should_include_project_in_list(&project_dir));
+
+        fs::remove_dir_all(&project_dir).expect("cleanup test directory");
+    }
+
+    #[test]
+    fn remove_project_from_list_hides_project_from_listing() {
+        let project_dir = unique_temp_project_dir("remove-from-list");
+        let lisan_dir = project_dir.join(".lisan");
+        fs::create_dir_all(&lisan_dir).expect("failed to create .lisan directory");
+        fs::write(project_dir.join("lisan.config.yaml"), "version: \"1\"\n")
+            .expect("write root config");
+        fs::write(lisan_dir.join("config.yaml"), "version: \"1\"\n").expect("write legacy config");
+        assert!(should_include_project_in_list(&project_dir));
+
+        remove_project_from_list(&project_dir).expect("remove from list");
+
+        assert!(project_dir.join(PROJECT_REMOVED_MARKER).exists());
+        assert!(!project_dir.join(".lisan").exists());
+        assert!(!should_include_project_in_list(&project_dir));
 
         fs::remove_dir_all(&project_dir).expect("cleanup test directory");
     }

@@ -8,6 +8,7 @@ import { Engine } from '../engine.js';
 import { RpcServer } from './rpc-server.js';
 import { ensureDefaultWorkflows } from '../workflow/defaults.js';
 import { RagSyncService } from '../rag/sync-service.js';
+import type { TruthFiles } from '../truth/types.js';
 
 function getProjectPath(): string {
   const idx = process.argv.indexOf('--project-path');
@@ -26,6 +27,7 @@ async function main() {
   const projectPath = getProjectPath();
   const engine = new Engine({ projectPath, provider: null as any });
   engine.agents.seedBuiltins();
+  let activeProjectId: string | null = null;
 
   const rpc = new RpcServer();
   const ragSyncService = new RagSyncService({
@@ -40,10 +42,22 @@ async function main() {
     send(rpc.notify(event.type, event as any));
   });
 
+  const resolveProjectId = (projectId?: string): string => {
+    const normalized = projectId?.trim();
+    if (normalized) {
+      return normalized;
+    }
+    if (activeProjectId) {
+      return activeProjectId;
+    }
+    throw new Error('projectId is required (or call project.open first).');
+  };
+
   // === project ===
   rpc.register('project.open', async ({ path }) => {
     const resolvedPath = path ?? projectPath;
     const project = engine.store.ensureProject(basename(resolvedPath), resolvedPath);
+    activeProjectId = project.id;
     return {
       opened: true,
       path: resolvedPath,
@@ -144,6 +158,19 @@ async function main() {
   rpc.register('entity.list', async ({ projectId, type }) => engine.store.queryEntities(projectId, type));
   rpc.register('entity.query', async ({ projectId, type }) => engine.store.queryEntities(projectId, type));
   rpc.register('entity.save', async ({ entity }) => engine.store.saveEntity(entity));
+
+  // === truth ===
+  rpc.register('truth.read', async ({ projectId }) => {
+    const resolvedProjectId = resolveProjectId(projectId);
+    await engine.truth.init(resolvedProjectId);
+    return engine.truth.read(resolvedProjectId);
+  });
+  rpc.register('truth.update', async ({ projectId, files, patch }) => {
+    const resolvedProjectId = resolveProjectId(projectId);
+    const next = (files ?? patch ?? {}) as Partial<TruthFiles>;
+    await engine.truth.init(resolvedProjectId);
+    return engine.truth.update(resolvedProjectId, next);
+  });
 
   // === rag ===
   rpc.register('rag.status', async () => ragSyncService.getStatus());

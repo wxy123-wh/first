@@ -13,6 +13,7 @@ import type {
   SettingDocument,
   SettingDocumentSummary,
   SidecarProjectOpenResult,
+  TruthFiles,
   WorkflowDefinition,
   WorkflowRerunOptions,
   WorkflowRunOptions,
@@ -77,6 +78,8 @@ export interface SidecarApi {
   settingDelete: (id: string) => Promise<void>;
   executionList: (projectId: string) => Promise<Execution[]>;
   executionDetail: (id: string) => Promise<ExecutionDetail>;
+  truthRead: (projectId: string) => Promise<TruthFiles>;
+  truthUpdate: (projectId: string, files: Partial<TruthFiles>) => Promise<TruthFiles>;
   ragSync: () => Promise<RagSyncStartResult>;
   ragStatus: () => Promise<RagSyncStatus>;
 }
@@ -219,6 +222,14 @@ export function useSidecar(): SidecarApi {
     return invokeCommand<ExecutionDetail>("execution_detail", { id });
   }, []);
 
+  const truthRead = useCallback((projectId: string) => {
+    return invokeCommand<TruthFiles>("truth_read", { projectId });
+  }, []);
+
+  const truthUpdate = useCallback((projectId: string, files: Partial<TruthFiles>) => {
+    return invokeCommand<TruthFiles>("truth_update", { projectId, files });
+  }, []);
+
   const ragSync = useCallback(() => {
     return invokeCommand<RagSyncStartResult>("rag_sync");
   }, []);
@@ -266,6 +277,8 @@ export function useSidecar(): SidecarApi {
       settingDelete,
       executionList,
       executionDetail,
+      truthRead,
+      truthUpdate,
       ragSync,
       ragStatus,
     }),
@@ -307,6 +320,8 @@ export function useSidecar(): SidecarApi {
       settingDelete,
       executionList,
       executionDetail,
+      truthRead,
+      truthUpdate,
       ragSync,
       ragStatus,
     ],

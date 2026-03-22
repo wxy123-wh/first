@@ -5,10 +5,11 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { useSidecar } from "@/hooks/useSidecar";
 import { getRagSyncState } from "@/lib/rag-sync-state";
 import { useAppStore } from "@/lib/store";
-import type { TagTemplateEntry } from "@/types/engine";
+import type { TagTemplateEntry, TruthFiles } from "@/types/engine";
 
 interface TemplateRow {
   key: string;
@@ -66,6 +67,14 @@ function buildTemplate(rows: TemplateRow[]): { template: TagTemplateEntry[]; err
   return { template, error: null };
 }
 
+function createEmptyTruthFiles(): TruthFiles {
+  return {
+    currentState: "",
+    pendingHooks: "",
+    characterMatrix: "",
+  };
+}
+
 export default function SettingsPage() {
   const sidecar = useSidecar();
   const currentProject = useAppStore((state) => state.currentProject);
@@ -76,6 +85,11 @@ export default function SettingsPage() {
   const [rows, setRows] = useState<TemplateRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [truthFiles, setTruthFiles] = useState<TruthFiles>(createEmptyTruthFiles);
+  const [truthLoading, setTruthLoading] = useState(false);
+  const [truthSaving, setTruthSaving] = useState(false);
+  const [truthError, setTruthError] = useState<string | null>(null);
+  const [truthNotice, setTruthNotice] = useState<string | null>(null);
 
   useEffect(() => {
     if (!currentProject?.id) {
@@ -102,6 +116,56 @@ export default function SettingsPage() {
       .finally(() => {
         if (!cancelled) {
           setLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentProject?.id, sidecar]);
+
+  const loadTruthFiles = async (projectId: string) => {
+    setTruthLoading(true);
+    setTruthError(null);
+    try {
+      const files = await sidecar.truthRead(projectId);
+      setTruthFiles(files);
+    } catch (reason: unknown) {
+      setTruthError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setTruthLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!currentProject?.id) {
+      setTruthFiles(createEmptyTruthFiles());
+      setTruthError(null);
+      setTruthNotice(null);
+      setTruthLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setTruthLoading(true);
+    setTruthError(null);
+    setTruthNotice(null);
+
+    sidecar
+      .truthRead(currentProject.id)
+      .then((files) => {
+        if (!cancelled) {
+          setTruthFiles(files);
+        }
+      })
+      .catch((reason: unknown) => {
+        if (!cancelled) {
+          setTruthError(reason instanceof Error ? reason.message : String(reason));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setTruthLoading(false);
         }
       });
 
@@ -152,6 +216,31 @@ export default function SettingsPage() {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const updateTruthField = (key: keyof TruthFiles, value: string) => {
+    setTruthFiles((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  };
+
+  const saveTruthFiles = async () => {
+    if (!currentProject?.id) {
+      return;
+    }
+    setTruthSaving(true);
+    setTruthError(null);
+    setTruthNotice(null);
+    try {
+      const next = await sidecar.truthUpdate(currentProject.id, truthFiles);
+      setTruthFiles(next);
+      setTruthNotice("真相文件已保存。");
+    } catch (reason: unknown) {
+      setTruthError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setTruthSaving(false);
     }
   };
 
@@ -239,6 +328,72 @@ export default function SettingsPage() {
             </Button>
             <Button type="button" onClick={() => void save()} disabled={saving}>
               {saving ? "保存中..." : "保存设置"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>真相文件（实验入口）</CardTitle>
+          <CardDescription>用于验证 truth.read / truth.update 链路是否可读写。</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {truthError && (
+            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {truthError}
+            </div>
+          )}
+          {truthNotice && (
+            <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700">
+              {truthNotice}
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label htmlFor="truth-current-state">current_state.md</Label>
+            <Textarea
+              id="truth-current-state"
+              value={truthFiles.currentState}
+              onChange={(event) => updateTruthField("currentState", event.target.value)}
+              className="min-h-[120px]"
+              placeholder="世界状态快照"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="truth-pending-hooks">pending_hooks.md</Label>
+            <Textarea
+              id="truth-pending-hooks"
+              value={truthFiles.pendingHooks}
+              onChange={(event) => updateTruthField("pendingHooks", event.target.value)}
+              className="min-h-[120px]"
+              placeholder="伏笔追踪"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="truth-character-matrix">character_matrix.md</Label>
+            <Textarea
+              id="truth-character-matrix"
+              value={truthFiles.characterMatrix}
+              onChange={(event) => updateTruthField("characterMatrix", event.target.value)}
+              className="min-h-[120px]"
+              placeholder="角色交互矩阵"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => currentProject?.id && void loadTruthFiles(currentProject.id)}
+              disabled={truthLoading}
+            >
+              {truthLoading ? "读取中..." : "重新读取"}
+            </Button>
+            <Button type="button" onClick={() => void saveTruthFiles()} disabled={truthSaving}>
+              {truthSaving ? "保存中..." : "保存真相文件"}
             </Button>
           </div>
         </CardContent>

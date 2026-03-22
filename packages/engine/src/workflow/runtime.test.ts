@@ -134,6 +134,39 @@ describe('WorkflowRuntime', () => {
     }
   });
 
+  it('marks execution failed and emits workflow:complete when step agent is missing', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+    const runtime = new WorkflowRuntime(env.store, env.registry, env.executor);
+
+    const workflow = env.store.saveWorkflow({
+      id: '',
+      projectId: env.project.id,
+      name: 'missing-agent-workflow',
+      description: 'test missing agent branch',
+      kind: 'chapter',
+      steps: [{ id: '', order: 0, agentId: 'missing-agent-id', enabled: true }],
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    const events: WorkflowEvent[] = [];
+    runtime.on((event) => events.push(event));
+
+    await runtime.run(workflow.id, {});
+
+    const executions = env.store.getExecutions(env.project.id);
+    expect(executions).toHaveLength(1);
+    expect(executions[0].status).toBe('failed');
+
+    const complete = events.find((event) => event.type === 'workflow:complete');
+    expect(complete?.type).toBe('workflow:complete');
+    if (complete?.type === 'workflow:complete') {
+      expect(complete.summary).toContain('Workflow failed');
+      expect(complete.summary).toContain('missing-agent-id');
+    }
+  });
+
   it('requires valid executionId for pause/resume/abort/skip controls', () => {
     const env = setupTestEnv();
     store = env.store;
@@ -910,6 +943,7 @@ describe('WorkflowRuntime', () => {
       projectId: env.project.id,
       name: 'chapter-content-sync-workflow',
       description: 'ensure chapter content sync',
+      kind: 'chapter',
       steps: [
         { id: '', order: 0, agentId: env.agent1.id, enabled: true, config: { primaryOutput: true } },
         { id: '', order: 1, agentId: env.agent2.id, enabled: true },
@@ -931,6 +965,167 @@ describe('WorkflowRuntime', () => {
     expect(env.store.getChapterContent(chapter.id)).toBe('主正文');
   });
 
+  it('does not write chapter content for scene workflow even if chapterId and primaryOutput are present', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const chapter = env.store.saveChapter({
+      projectId: env.project.id,
+      number: 1,
+      title: '第一章',
+      status: 'drafting',
+      contentPath: 'chapters/001.md',
+    });
+    env.store.saveChapterContent(chapter.id, '# 第一章\n\n旧内容');
+
+    const decomposeAgent = env.registry
+      .list()
+      .find((agent) => /拆解|decompose/i.test(agent.name));
+    expect(decomposeAgent).toBeDefined();
+    const workflow = env.store.saveWorkflow({
+      id: '',
+      projectId: env.project.id,
+      name: 'scene-no-chapter-write',
+      description: 'scene workflow should not write chapter body',
+      kind: 'scene',
+      steps: [{ id: '', order: 0, agentId: decomposeAgent!.id, enabled: true, config: { primaryOutput: true } }],
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(makeMockProvider(['新正文候选'])),
+      new ContextBuilder(env.store),
+    );
+
+    await runtime.run(workflow.id, { sourceOutline: '用于测试场景流程不应回写章节正文。' }, chapter.id);
+
+    expect(env.store.getChapterContent(chapter.id)).toBe('# 第一章\n\n旧内容');
+  });
+
+  it('does not write chapter content when chapter workflow has no explicit writeback permission', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const chapter = env.store.saveChapter({
+      projectId: env.project.id,
+      number: 1,
+      title: '第一章',
+      status: 'drafting',
+      contentPath: 'chapters/001.md',
+    });
+    env.store.saveChapterContent(chapter.id, '# 第一章\n\n旧内容');
+
+    const workflow = env.store.saveWorkflow({
+      id: '',
+      projectId: env.project.id,
+      name: 'chapter-without-writeback-permission',
+      description: 'chapter workflow should require explicit writeback opt-in',
+      kind: 'chapter',
+      steps: [{ id: '', order: 0, agentId: env.agent1.id, enabled: true }],
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(makeMockProvider(['新正文候选'])),
+      new ContextBuilder(env.store),
+    );
+
+    await runtime.run(workflow.id, {}, chapter.id);
+
+    expect(env.store.getChapterContent(chapter.id)).toBe('# 第一章\n\n旧内容');
+  });
+
+  it('includes deterministic checkDraft error/warning counts in chapter workflow summary', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const chapter = env.store.saveChapter({
+      projectId: env.project.id,
+      number: 1,
+      title: '第一章',
+      status: 'drafting',
+      contentPath: 'chapters/001.md',
+    });
+
+    const workflow = env.store.saveWorkflow({
+      id: '',
+      projectId: env.project.id,
+      name: 'chapter-checkdraft-summary',
+      description: 'chapter deterministic check summary visibility',
+      kind: 'chapter',
+      steps: [{ id: '', order: 0, agentId: env.agent1.id, enabled: true, config: { primaryOutput: true } }],
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(makeMockProvider(['在这个世界，他感到愤怒。他感到恐惧。他感到紧张。'])),
+      new ContextBuilder(env.store),
+    );
+
+    const events: WorkflowEvent[] = [];
+    runtime.on((event) => events.push(event));
+
+    await runtime.run(workflow.id, {}, chapter.id);
+
+    const complete = events.find((event) => event.type === 'workflow:complete');
+    expect(complete?.type).toBe('workflow:complete');
+    if (complete?.type === 'workflow:complete') {
+      expect(complete.summary).toContain('error');
+      expect(complete.summary).toContain('warning');
+    }
+  });
+
+  it('persists entities from Data Agent JSON output with upsert semantics', async () => {
+    const env = setupTestEnv();
+    store = env.store;
+
+    const dataAgent = env.registry.list().find((agent) => agent.name === 'Data Agent');
+    expect(dataAgent).toBeDefined();
+    const workflow = env.store.saveWorkflow({
+      id: '',
+      projectId: env.project.id,
+      name: 'chapter-data-agent-persist',
+      description: 'persist entities from data agent output',
+      kind: 'chapter',
+      steps: [{ id: '', order: 0, agentId: dataAgent!.id, enabled: true }],
+      createdAt: '',
+      updatedAt: '',
+    });
+
+    const runtime = new WorkflowRuntime(
+      env.store,
+      env.registry,
+      new AgentExecutor(
+        makeMockProvider([
+          JSON.stringify({
+            entities: [{ type: 'character', name: '卡列尔', data: { faction: '旧港帮' } }],
+          }),
+          JSON.stringify({
+            entities: [{ type: 'character', name: '卡列尔', data: { faction: '新同盟', rank: '队长' } }],
+          }),
+        ]),
+      ),
+      new ContextBuilder(env.store),
+    );
+
+    await runtime.run(workflow.id, {});
+    await runtime.run(workflow.id, {});
+
+    const entities = env.store.queryEntities(env.project.id, 'character');
+    expect(entities).toHaveLength(1);
+    expect(entities[0].name).toBe('卡列尔');
+    expect(entities[0].data).toMatchObject({ faction: '新同盟', rank: '队长' });
+  });
+
   it('marks execution as failed when chapter content persistence fails', async () => {
     const env = setupTestEnv();
     store = env.store;
@@ -948,6 +1143,7 @@ describe('WorkflowRuntime', () => {
       projectId: env.project.id,
       name: 'chapter-content-failure-workflow',
       description: 'ensure chapter content write failure marks execution failed',
+      kind: 'chapter',
       steps: [
         { id: '', order: 0, agentId: env.agent1.id, enabled: true, config: { primaryOutput: true } },
       ],
@@ -1429,6 +1625,8 @@ describe('WorkflowRuntime', () => {
       executor,
       new ContextBuilder(env.store),
     );
+    const events: WorkflowEvent[] = [];
+    runtime.on((event) => events.push(event));
 
     await runtime.run(env.workflow.id, {});
 
@@ -1440,5 +1638,12 @@ describe('WorkflowRuntime', () => {
     expect(detail.steps.length).toBe(1);
     expect(detail.steps[0].status).toBe('failed');
     expect(detail.steps[0].output).toContain('mock provider failure');
+
+    const complete = events.find((event) => event.type === 'workflow:complete');
+    expect(complete?.type).toBe('workflow:complete');
+    if (complete?.type === 'workflow:complete') {
+      expect(complete.summary).toContain('Workflow failed');
+      expect(complete.summary).toContain('mock provider failure');
+    }
   });
 });

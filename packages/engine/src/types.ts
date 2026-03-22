@@ -19,6 +19,14 @@ export interface SceneGenerationChapterContext {
   title: string;
 }
 
+export interface RagReference {
+  source: string;
+  type: 'setting' | 'chapter' | 'scene' | 'outline' | 'reference';
+  abstract: string;
+  excerpt: string;
+  score: number;
+}
+
 export interface DecomposeContext {
   sourceOutline: string;
   chapter?: SceneGenerationChapterContext;
@@ -27,6 +35,8 @@ export interface DecomposeContext {
   settingSummaries: string[];
   tagTemplate: TagTemplateEntry[];
   tagTemplateConstraints: string[];
+  ragReferences?: RagReference[];
+  ragReferenceSummaries?: string[];
 }
 
 export type ProviderType = 'anthropic' | 'openai' | 'newapi';

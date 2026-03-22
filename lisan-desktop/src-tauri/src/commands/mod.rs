@@ -55,6 +55,22 @@ fn normalize_rag_sync_error(err: String) -> String {
     err
 }
 
+fn normalize_truth_read_error(err: String) -> String {
+    if is_method_not_found(&err) {
+        return "真相文件读取失败：当前 sidecar 不支持 truth.read。请重建 @lisan/engine sidecar 后重试。"
+            .to_string();
+    }
+    err
+}
+
+fn normalize_truth_update_error(err: String) -> String {
+    if is_method_not_found(&err) {
+        return "真相文件保存失败：当前 sidecar 不支持 truth.update。请重建 @lisan/engine sidecar 后重试。"
+            .to_string();
+    }
+    err
+}
+
 fn build_agent_register_params(agent: &Value) -> Value {
     json!({
         "name": agent.get("name").cloned().unwrap_or(Value::String("未命名智能体".to_string())),
@@ -644,6 +660,39 @@ pub async fn execution_detail(
 }
 
 #[tauri::command]
+pub async fn truth_read(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Value, String> {
+    rpc_call(
+        &state,
+        &app,
+        &["truth.read"],
+        json!({ "projectId": project_id }),
+    )
+    .await
+    .map_err(normalize_truth_read_error)
+}
+
+#[tauri::command]
+pub async fn truth_update(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project_id: String,
+    files: Value,
+) -> Result<Value, String> {
+    rpc_call(
+        &state,
+        &app,
+        &["truth.update"],
+        json!({ "projectId": project_id, "files": files }),
+    )
+    .await
+    .map_err(normalize_truth_update_error)
+}
+
+#[tauri::command]
 pub async fn rag_sync(app: AppHandle, state: State<'_, AppState>) -> Result<Value, String> {
     rpc_call(&state, &app, &["rag.sync"], json!({}))
         .await
@@ -698,6 +747,14 @@ mod tests {
         let error = "RPC error -32601: Method not found: rag.sync".to_string();
         let normalized = normalize_rag_sync_error(error);
         assert!(normalized.contains("rag.sync"));
+        assert!(normalized.contains("请重建 @lisan/engine sidecar"));
+    }
+
+    #[test]
+    fn normalize_truth_read_error_maps_method_not_found() {
+        let error = "RPC error -32601: Method not found: truth.read".to_string();
+        let normalized = normalize_truth_read_error(error);
+        assert!(normalized.contains("truth.read"));
         assert!(normalized.contains("请重建 @lisan/engine sidecar"));
     }
 }

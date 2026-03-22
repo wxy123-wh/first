@@ -67,6 +67,49 @@ function flattenSceneTree(scenes: SceneCardType[]): SceneRow[] {
   return rows;
 }
 
+export function reorderSceneIdsByVisibleOrder(
+  allSceneIds: string[],
+  visibleSceneIds: string[],
+  sceneId: string,
+  direction: "up" | "down",
+): string[] | null {
+  const index = visibleSceneIds.indexOf(sceneId);
+  if (index === -1) {
+    return null;
+  }
+
+  const swapIndex = direction === "up" ? index - 1 : index + 1;
+  if (swapIndex < 0 || swapIndex >= visibleSceneIds.length) {
+    return null;
+  }
+
+  const reorderedVisible = [...visibleSceneIds];
+  const [moved] = reorderedVisible.splice(index, 1);
+  reorderedVisible.splice(swapIndex, 0, moved);
+
+  const visibleIdSet = new Set(visibleSceneIds);
+  const reorderedAll: string[] = [];
+  let visiblePointer = 0;
+  for (const id of allSceneIds) {
+    if (visibleIdSet.has(id)) {
+      const nextVisibleId = reorderedVisible[visiblePointer];
+      if (!nextVisibleId) {
+        return null;
+      }
+      reorderedAll.push(nextVisibleId);
+      visiblePointer += 1;
+      continue;
+    }
+    reorderedAll.push(id);
+  }
+
+  if (visiblePointer !== reorderedVisible.length) {
+    return null;
+  }
+
+  return reorderedAll;
+}
+
 export default function ScenesPage() {
   const sidecar = useSidecar();
   const navigate = useNavigate();
@@ -127,8 +170,9 @@ export default function ScenesPage() {
     void loadData();
   }, [currentProject?.id]);
 
+  const allRows = useMemo(() => flattenSceneTree(scenes), [scenes]);
   const visibleRows = useMemo(() => {
-    const rows = flattenSceneTree(scenes);
+    const rows = allRows;
     if (chapterFilter === "all") {
       return rows;
     }
@@ -136,7 +180,7 @@ export default function ScenesPage() {
       return rows.filter((row) => !row.scene.chapterId);
     }
     return rows.filter((row) => row.scene.chapterId === chapterFilter);
-  }, [chapterFilter, scenes]);
+  }, [allRows, chapterFilter]);
   const visibleScenes = useMemo(() => visibleRows.map((row) => row.scene), [visibleRows]);
   const bindableCount = useMemo(() => {
     if (!batchChapterId) {
@@ -202,19 +246,17 @@ export default function ScenesPage() {
   };
 
   const moveScene = async (sceneId: string, direction: "up" | "down") => {
-    const ordered = [...scenes].sort((a, b) => a.order - b.order);
-    const index = ordered.findIndex((scene) => scene.id === sceneId);
-    if (index === -1) {
+    const nextOrder = reorderSceneIdsByVisibleOrder(
+      allRows.map((row) => row.scene.id),
+      visibleRows.map((row) => row.scene.id),
+      sceneId,
+      direction,
+    );
+    if (!nextOrder) {
       return;
     }
-    const swapIndex = direction === "up" ? index - 1 : index + 1;
-    if (swapIndex < 0 || swapIndex >= ordered.length) {
-      return;
-    }
-    const [moved] = ordered.splice(index, 1);
-    ordered.splice(swapIndex, 0, moved);
     try {
-      await sidecar.sceneReorder(ordered.map((scene) => scene.id));
+      await sidecar.sceneReorder(nextOrder);
       await loadData();
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : String(reason));

@@ -9,6 +9,7 @@ import { useAppStore } from "@/lib/store";
 import type {
   AgentDefinition,
   ExecutionDetail,
+  ExecutionStatus,
   ExecutionStep,
   StepStatus,
   WorkflowDefinition,
@@ -27,6 +28,37 @@ function statusVariant(status: StepStatus | "running"): "default" | "secondary" 
     return "destructive";
   }
   return "secondary";
+}
+
+function asExecutionStatus(value: unknown): ExecutionStatus | null {
+  if (value === "pending" || value === "running" || value === "completed" || value === "failed") {
+    return value;
+  }
+  return null;
+}
+
+export function syncExecutionStatusFromEvent(
+  currentStatus: ExecutionStatus,
+  event: WorkflowNotification,
+): ExecutionStatus {
+  if (event.method === "workflow:start") {
+    return "running";
+  }
+  if (event.method === "step:failed") {
+    return "failed";
+  }
+  if (event.method === "workflow:complete") {
+    const statusFromEvent = asExecutionStatus(event.params?.status);
+    if (statusFromEvent) {
+      return statusFromEvent;
+    }
+    return currentStatus === "failed" ? "failed" : "completed";
+  }
+  return currentStatus;
+}
+
+export function shouldRefreshExecutionDetail(event: WorkflowNotification): boolean {
+  return event.method === "workflow:complete" || event.method === "step:failed";
 }
 
 function applyEventToSteps(steps: StepViewModel[], event: WorkflowNotification): StepViewModel[] {
@@ -154,6 +186,38 @@ export default function ExecutionDetailPage() {
       return;
     }
     setSteps((current) => applyEventToSteps(current, latestEvent));
+  }, [latestEvent, execId]);
+
+  useEffect(() => {
+    if (!latestEvent) {
+      return;
+    }
+    const eventExecutionId =
+      typeof latestEvent.params?.executionId === "string" ? latestEvent.params.executionId : undefined;
+    if (!execId || eventExecutionId !== execId) {
+      return;
+    }
+
+    setDetail((current) => {
+      if (!current) {
+        return current;
+      }
+      const nextStatus = syncExecutionStatusFromEvent(current.execution.status, latestEvent);
+      if (nextStatus === current.execution.status) {
+        return current;
+      }
+      return {
+        ...current,
+        execution: {
+          ...current.execution,
+          status: nextStatus,
+        },
+      };
+    });
+
+    if (shouldRefreshExecutionDetail(latestEvent)) {
+      void loadDetail();
+    }
   }, [latestEvent, execId]);
 
   useEffect(() => {

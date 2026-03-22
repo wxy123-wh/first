@@ -6,6 +6,7 @@ import type { AgentExecutor } from '../agent/executor.js';
 import type { ContextBuilder } from './context-builder.js';
 import type { WorkflowDefinition, SceneCard, DecomposeContext, AgentDefinition } from '../types.js';
 import { renderTemplate } from '../template/engine.js';
+import { checkDraft } from '../checker/post-write-checker.js';
 
 interface ParsedSceneDraft {
   title: string;
@@ -87,6 +88,29 @@ interface ScenePersistResult {
   fallbackBoundCount: number;
   parsedPayloadCount: number;
   parsedSceneCount: number;
+  repairCount: number;
+  parseErrors: string[];
+  validationErrors: string[];
+}
+
+type EntityType = 'character' | 'location' | 'item' | 'event';
+
+interface ParsedEntityDraft {
+  type: EntityType;
+  name: string;
+  data: Record<string, unknown>;
+}
+
+interface EntityNormalizationResult {
+  entity: ParsedEntityDraft | null;
+  error?: string;
+}
+
+interface EntityPersistResult {
+  savedCount: number;
+  updatedCount: number;
+  parsedPayloadCount: number;
+  parsedEntityCount: number;
   repairCount: number;
   parseErrors: string[];
   validationErrors: string[];
@@ -264,6 +288,60 @@ function extractSceneList(parsed: unknown): unknown[] {
 function collectUnresolvedPlaceholders(renderedTemplate: string): string[] {
   const matches = renderedTemplate.match(/\{\{\s*[^{}]+\s*\}\}/g) ?? [];
   return [...new Set(matches.map((match) => match.trim()))];
+}
+
+function normalizeEntityType(raw: unknown): EntityType | null {
+  if (typeof raw !== 'string') {
+    return null;
+  }
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === 'character' || normalized === 'location' || normalized === 'item' || normalized === 'event') {
+    return normalized;
+  }
+  return null;
+}
+
+function extractEntityList(parsed: unknown): unknown[] {
+  if (Array.isArray(parsed)) {
+    return parsed;
+  }
+  const record = asRecord(parsed);
+  if (!record) {
+    return [];
+  }
+  if (Array.isArray(record.entities)) {
+    return record.entities;
+  }
+  return [];
+}
+
+function normalizeEntityDraft(value: unknown, outputIndex: number, entityIndex: number): EntityNormalizationResult {
+  const record = asRecord(value);
+  if (!record) {
+    return {
+      entity: null,
+      error: `输出 #${outputIndex} 的第 ${entityIndex} 条实体不是对象。`,
+    };
+  }
+
+  const type = normalizeEntityType(record.type);
+  const nameRaw = record.name;
+  const name = typeof nameRaw === 'string' ? nameRaw.trim() : '';
+  if (!type || !name) {
+    return {
+      entity: null,
+      error: `输出 #${outputIndex} 的第 ${entityIndex} 条实体缺少最小字段（type/name）。`,
+    };
+  }
+
+  const dataRecord = asRecord(record.data);
+  return {
+    entity: {
+      type,
+      name,
+      data: dataRecord ?? {},
+    },
+  };
 }
 
 function eventSkeletonFingerprint(eventSkeleton: string[]): string {
@@ -852,9 +930,99 @@ export class WorkflowRuntime {
     return '场景写入失败：未生成可保存的场景。';
   }
 
+  private isDataAgent(agent: Pick<AgentDefinition, 'name' | 'agentMdPath'>): boolean {
+    return agent.name === 'Data Agent' || /data-agent/i.test(agent.agentMdPath);
+  }
+
+  private persistEntitiesFromDataAgentOutputs(
+    projectId: string,
+    outputs: string[],
+  ): EntityPersistResult {
+    const existingEntities = this.store.queryEntities(projectId);
+    const existingByKey = new Map(
+      existingEntities.map((entity) => [`${entity.type}::${entity.name.trim().toLocaleLowerCase()}`, entity]),
+    );
+    let savedCount = 0;
+    let updatedCount = 0;
+    let parsedPayloadCount = 0;
+    let parsedEntityCount = 0;
+    let repairCount = 0;
+    const parseErrors: string[] = [];
+    const validationErrors: string[] = [];
+
+    for (let outputIndex = 0; outputIndex < outputs.length; outputIndex += 1) {
+      const output = outputs[outputIndex];
+      const parseAttempt = parseJsonWithOneRepairRetry(output);
+      if (!parseAttempt.parsed) {
+        parseErrors.push(
+          `输出 #${outputIndex + 1}：${parseAttempt.parseError ?? 'JSON 解析失败：未知错误。'}`,
+        );
+        continue;
+      }
+      parsedPayloadCount += 1;
+      if (parseAttempt.repaired) {
+        repairCount += 1;
+      }
+
+      const entityList = extractEntityList(parseAttempt.parsed);
+      if (entityList.length === 0) {
+        continue;
+      }
+      parsedEntityCount += entityList.length;
+
+      for (let entityIndex = 0; entityIndex < entityList.length; entityIndex += 1) {
+        const normalized = normalizeEntityDraft(
+          entityList[entityIndex],
+          outputIndex + 1,
+          entityIndex + 1,
+        );
+        if (!normalized.entity) {
+          if (normalized.error) {
+            validationErrors.push(normalized.error);
+          }
+          continue;
+        }
+
+        const entity = normalized.entity;
+        const key = `${entity.type}::${entity.name.trim().toLocaleLowerCase()}`;
+        const existing = existingByKey.get(key);
+        const mergedData = existing
+          ? { ...existing.data, ...entity.data }
+          : entity.data;
+        const saved = this.store.saveEntity({
+          id: existing?.id,
+          projectId,
+          type: entity.type,
+          name: entity.name,
+          data: mergedData,
+        });
+        existingByKey.set(key, saved);
+        savedCount += 1;
+        if (existing) {
+          updatedCount += 1;
+        }
+      }
+    }
+
+    return {
+      savedCount,
+      updatedCount,
+      parsedPayloadCount,
+      parsedEntityCount,
+      repairCount,
+      parseErrors,
+      validationErrors,
+    };
+  }
+
+  private hasExplicitChapterWritebackPermission(enabledSteps: WorkflowDefinition['steps']): boolean {
+    return enabledSteps.some((step) => step.config?.primaryOutput === true);
+  }
+
   private pickChapterPrimaryOutput(
     enabledSteps: WorkflowDefinition['steps'],
     stepOutputs: Record<string, string>,
+    requirePrimaryStep = false,
   ): string | null {
     const configuredPrimary = enabledSteps.filter((step) => step.config?.primaryOutput === true);
     for (let i = configuredPrimary.length - 1; i >= 0; i--) {
@@ -862,6 +1030,10 @@ export class WorkflowRuntime {
       if (typeof output === 'string' && output.trim().length > 0) {
         return output.trim();
       }
+    }
+
+    if (requirePrimaryStep) {
+      return null;
     }
 
     for (let i = enabledSteps.length - 1; i >= 0; i--) {
@@ -913,6 +1085,8 @@ export class WorkflowRuntime {
       this.emit({ type: 'workflow:start', executionId: execution.id, workflowId, chapterId });
 
       const stepOutputs: Record<string, string> = {};
+      const dataAgentOutputs: string[] = [];
+      let executionFailureMessage = '';
 
       for (let i = 0; i < enabledSteps.length; i++) {
         // Check abort
@@ -960,12 +1134,14 @@ export class WorkflowRuntime {
         const agent = agents.find(a => a.id === step.agentId);
         if (!agent) {
           const error = `Agent not found: ${step.agentId}`;
+          executionFailureMessage = `缺失 agentId: ${step.agentId}`;
           this.emit({ type: 'step:failed', executionId: execution.id, stepId: step.id, error });
           this.store.saveExecutionStep({
             executionId: execution.id,
             stepId: step.id,
             agentId: step.agentId,
             status: 'failed',
+            output: error,
             order: i,
           });
           break;
@@ -1035,6 +1211,10 @@ export class WorkflowRuntime {
             duration: result.duration,
             order: i,
           });
+
+          if (this.isDataAgent(agent)) {
+            dataAgentOutputs.push(result.text);
+          }
         } catch (err) {
           const interruption = this.getExecutionControl(execution.id).interruption;
           if (interruption?.stepId === step.id && interruption.type === 'skip') {
@@ -1076,10 +1256,12 @@ export class WorkflowRuntime {
               output: abortedMessage,
               order: i,
             });
+            executionFailureMessage = abortedMessage;
             break;
           }
 
           const error = err instanceof Error ? err.message : String(err);
+          executionFailureMessage = error;
           this.emit({ type: 'step:failed', executionId: execution.id, stepId: step.id, error });
           this.store.saveExecutionStep({
             executionId: execution.id,
@@ -1090,9 +1272,7 @@ export class WorkflowRuntime {
             output: error,
             order: i,
           });
-          // Mark execution as failed
-          this.store.saveExecution({ ...execution, status: 'failed', completedAt: new Date().toISOString() });
-          return;
+          break;
         } finally {
           if (control.currentStepId === step.id) {
             control.currentStepId = null;
@@ -1105,18 +1285,36 @@ export class WorkflowRuntime {
         }
       }
 
-      let finalStatus: 'failed' | 'completed' = control.aborted ? 'failed' : 'completed';
+      if (control.aborted && !executionFailureMessage) {
+        executionFailureMessage = '执行已终止。';
+      }
+      let finalStatus: 'failed' | 'completed' =
+        control.aborted || executionFailureMessage ? 'failed' : 'completed';
       let persistedScenes = 0;
       let persistedBoundScenes = 0;
       let persistedUnboundScenes = 0;
       let persistedFallbackBoundScenes = 0;
       let persistedSceneRepairCount = 0;
+      let persistedEntities = 0;
+      let updatedEntities = 0;
       let scenePersistFailureMessage = '';
       let scenePersistWarningMessage = '';
       let chapterContentPersistMessage = '';
+      let entityPersistMessage = '';
+      let deterministicCheckMessage = '';
       const sourceOutline = resolvedGlobalContext.sourceOutline;
       const sourceOutlineText = typeof sourceOutline === 'string' ? sourceOutline.trim() : '';
       const shouldRequireSceneOutput = sourceOutlineText.length > 0;
+      const chapterOutputForCheck =
+        workflow.kind === 'chapter'
+          ? this.pickChapterPrimaryOutput(enabledSteps, stepOutputs)
+          : null;
+      if (workflow.kind === 'chapter' && chapterOutputForCheck) {
+        const checkResult = checkDraft(chapterOutputForCheck);
+        deterministicCheckMessage =
+          ` 确定性检查：error ${checkResult.errors.length}，warning ${checkResult.warnings.length}。`;
+      }
+
       if (finalStatus === 'completed') {
         const scenePersistResult = this.persistScenesFromOutputs(
           workflow,
@@ -1136,8 +1334,36 @@ export class WorkflowRuntime {
           finalStatus = 'failed';
           scenePersistFailureMessage = ` 场景写入失败：${this.buildScenePersistFailureReason(scenePersistResult)}`;
         }
-        if (finalStatus === 'completed' && chapterId) {
-          const chapterOutput = this.pickChapterPrimaryOutput(enabledSteps, stepOutputs);
+        if (finalStatus === 'completed' && dataAgentOutputs.length > 0) {
+          const entityPersistResult = this.persistEntitiesFromDataAgentOutputs(
+            workflow.projectId,
+            dataAgentOutputs,
+          );
+          persistedEntities = entityPersistResult.savedCount;
+          updatedEntities = entityPersistResult.updatedCount;
+          if (persistedEntities > 0) {
+            entityPersistMessage = ` 已沉淀 ${persistedEntities} 条实体。`;
+            if (updatedEntities > 0) {
+              entityPersistMessage += ` 其中 ${updatedEntities} 条为 upsert 更新。`;
+            }
+          }
+          if (entityPersistResult.validationErrors.length > 0) {
+            entityPersistMessage += ` 实体字段校验跳过 ${entityPersistResult.validationErrors.length} 条。`;
+          } else if (
+            entityPersistResult.parseErrors.length > 0 &&
+            entityPersistResult.savedCount === 0 &&
+            entityPersistResult.parsedPayloadCount === 0
+          ) {
+            entityPersistMessage += ' 实体 JSON 解析失败。';
+          }
+        }
+
+        const canWriteChapterContent =
+          workflow.kind === 'chapter' &&
+          chapterId &&
+          this.hasExplicitChapterWritebackPermission(enabledSteps);
+        if (finalStatus === 'completed' && canWriteChapterContent && chapterId) {
+          const chapterOutput = this.pickChapterPrimaryOutput(enabledSteps, stepOutputs, true);
           if (chapterOutput) {
             try {
               this.store.saveChapterContent(chapterId, chapterOutput);
@@ -1151,12 +1377,16 @@ export class WorkflowRuntime {
         }
       }
       this.store.saveExecution({ ...execution, status: finalStatus, completedAt: new Date().toISOString() });
+      const executionFailureSummary =
+        finalStatus === 'failed' && executionFailureMessage
+          ? ` 执行失败原因：${executionFailureMessage}`
+          : '';
 
       this.emit({
         type: 'workflow:complete',
         executionId: execution.id,
         chapterId,
-        summary: `Workflow ${finalStatus}. ${Object.keys(stepOutputs).length} steps produced output. 已保存 ${persistedScenes} 条场景。 本次绑定章节 ${persistedBoundScenes} 条，未绑定章节 ${persistedUnboundScenes} 条。${persistedFallbackBoundScenes > 0 ? ` 其中 ${persistedFallbackBoundScenes} 条场景缺失 chapterId，已按入口章节兜底绑定。` : ''}${persistedUnboundScenes > 0 ? ` 其中 ${persistedUnboundScenes} 条未绑定章节，请尽快修复。` : ''}${persistedSceneRepairCount > 0 ? ` 解析修复 ${persistedSceneRepairCount} 次。` : ''}${scenePersistWarningMessage}${scenePersistFailureMessage}${chapterContentPersistMessage}`,
+        summary: `Workflow ${finalStatus}. ${Object.keys(stepOutputs).length} steps produced output. 已保存 ${persistedScenes} 条场景。 本次绑定章节 ${persistedBoundScenes} 条，未绑定章节 ${persistedUnboundScenes} 条。${persistedFallbackBoundScenes > 0 ? ` 其中 ${persistedFallbackBoundScenes} 条场景缺失 chapterId，已按入口章节兜底绑定。` : ''}${persistedUnboundScenes > 0 ? ` 其中 ${persistedUnboundScenes} 条未绑定章节，请尽快修复。` : ''}${persistedSceneRepairCount > 0 ? ` 解析修复 ${persistedSceneRepairCount} 次。` : ''}${scenePersistWarningMessage}${scenePersistFailureMessage}${entityPersistMessage}${deterministicCheckMessage}${executionFailureSummary}${chapterContentPersistMessage}`,
       });
     } finally {
       if (executionId) {

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ContextBuilder } from './context-builder.js';
 import { StoreManager } from '../store/store-manager.js';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -117,5 +117,51 @@ describe('ContextBuilder', () => {
     expect(ctx.tagTemplate).toHaveLength(1);
     expect(ctx.tagTemplate[0].key).toBe('mood');
     expect(ctx.tagTemplateConstraints.join('\n')).toContain('情绪');
+  });
+
+  it('buildChapterContext injects rag retrieval snippets into chapter context', () => {
+    const env = setupTestEnv();
+    store = env.store;
+    const ragRetriever = {
+      search: vi.fn().mockReturnValue([
+        {
+          source: '设定集/世界规则.md',
+          type: 'setting',
+          abstract: '主角在三阶能力体系中会被代价反噬',
+          excerpt: '能力体系分三阶，每阶有明确代价与上限。',
+          score: 0.92,
+        },
+      ]),
+    };
+    const builder = new ContextBuilder(env.store, ragRetriever as any);
+
+    const ctx = builder.buildChapterContext(env.chapter.id);
+
+    expect((ctx as any).ragReferences).toHaveLength(1);
+    expect((ctx as any).ragReferenceSummaries?.join('\n')).toContain('设定集/世界规则.md');
+    expect(ctx.previousChapterTail).toContain('RAG检索参考');
+  });
+
+  it('buildDecomposeContext appends rag retrieval summaries to scene context', () => {
+    const env = setupTestEnv();
+    store = env.store;
+    const ragRetriever = {
+      search: vi.fn().mockReturnValue([
+        {
+          source: '大纲/arc-1.md',
+          type: 'outline',
+          abstract: '第二幕冲突升级，敌我关系反转',
+          excerpt: '主角误判盟友立场，导致冲突失控。',
+          score: 0.88,
+        },
+      ]),
+    };
+    const builder = new ContextBuilder(env.store, ragRetriever as any);
+
+    const ctx = builder.buildDecomposeContext('大纲内容：故事从这里开始...', env.project.id, env.chapter.id);
+
+    expect((ctx as any).ragReferences).toHaveLength(1);
+    expect((ctx as any).ragReferenceSummaries?.join('\n')).toContain('大纲/arc-1.md');
+    expect(ctx.settingSummaries.join('\n')).toContain('【RAG】');
   });
 });
